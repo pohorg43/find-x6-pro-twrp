@@ -54,7 +54,7 @@ sudo rm -rf \
 
 sudo apt-get clean 2>/dev/null || true
 
-echo "--- 5. Configuring 12G Disk Swap (kexi1412 OOM prevention recipe) ---"
+echo "--- 5. Configuring 28G Disk Swap (Anti-OOM protection for soong_build) ---"
 if mountpoint -q /mnt; then
     echo "Found dedicated mountpoint at /mnt. Placing swapfile on /mnt..."
     SWAP_FILE="/mnt/swapfile"
@@ -63,8 +63,8 @@ else
     SWAP_FILE="/swapfile"
 fi
 
-echo "Creating 12G disk swapfile at $SWAP_FILE..."
-sudo fallocate -l 12G "$SWAP_FILE" || sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=12288
+echo "Creating 28G disk swapfile at $SWAP_FILE..."
+sudo fallocate -l 28G "$SWAP_FILE" || sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=28672
 sudo chmod 600 "$SWAP_FILE"
 sudo mkswap "$SWAP_FILE"
 sudo swapon "$SWAP_FILE"
@@ -81,8 +81,8 @@ sudo du -xh --max-depth=2 /usr /opt /var 2>/dev/null | sort -hr | head -n 15 || 
 
 ROOT_FREE=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
 echo "=== Available space on /: ${ROOT_FREE}G ==="
-if [ "$ROOT_FREE" -lt 45 ]; then
-    echo "WARNING: Free space on / is ${ROOT_FREE}G (< 45G target)!"
+if [ "$ROOT_FREE" -lt 35 ]; then
+    echo "WARNING: Free space on / is ${ROOT_FREE}G (< 35G target)!"
 else
     echo "✓ Disk space verification PASSED: ${ROOT_FREE}G free on /"
 fi

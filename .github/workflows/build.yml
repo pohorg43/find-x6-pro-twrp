@@ -9,9 +9,9 @@ on:
         type: boolean
         default: true
       build_jobs:
-        description: "Parallel build jobs (0 = auto, capped at 3)"
+        description: "Parallel build jobs (capped at 2 to protect memory)"
         required: false
-        default: "0"
+        default: "2"
 
 jobs:
   twrp-ci:
@@ -89,6 +89,16 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Cache target toolchains (Clang & Rust)
+        if: ${{ !inputs.dry_run }}
+        id: cache-toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/twrp_src/prebuilts/clang/host/linux-x86
+            /home/runner/twrp_src/prebuilts/rust
+          key: twrp16-toolchains-r547379-rust1.83.0
+
       - name: Full Build - Sync TWRP Manifest
         if: ${{ !inputs.dry_run }}
         run: |
@@ -111,17 +121,22 @@ jobs:
           echo "=== Disk space after removing .repo ==="
           df -h /
 
-          echo "=== Sparse-cloning target Clang (clang-r547379) at tag android-16.0.0_r1 ==="
-          git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-          git -C prebuilts/clang/host/linux-x86 sparse-checkout set clang-r547379 clang-stable soong profiles
-          rm -rf prebuilts/clang/host/linux-x86/.git
+          if [ -f "prebuilts/clang/host/linux-x86/clang-r547379/bin/clang" ] && [ -d "prebuilts/rust/linux-x86/1.83.0" ]; then
+            echo "=== Target toolchains restored from cache, skipping sparse clone ==="
+          else
+            echo "=== Cache miss or incomplete toolchains. Sparse-cloning target Clang (clang-r547379) ==="
+            rm -rf prebuilts/clang/host/linux-x86 prebuilts/rust
+            git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+            git -C prebuilts/clang/host/linux-x86 sparse-checkout set clang-r547379 clang-stable soong profiles
+            rm -rf prebuilts/clang/host/linux-x86/.git
 
-          echo "=== Sparse-cloning target Rust (1.83.0 / linux-x86) at tag android-16.0.0_r1 ==="
-          git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/rust prebuilts/rust
-          git -C prebuilts/rust sparse-checkout set linux-x86/1.83.0 linux-x86/stable soong
-          rm -rf prebuilts/rust/.git
+            echo "=== Sparse-cloning target Rust (1.83.0 / linux-x86) at tag android-16.0.0_r1 ==="
+            git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/rust prebuilts/rust
+            git -C prebuilts/rust sparse-checkout set linux-x86/1.83.0 linux-x86/stable soong
+            rm -rf prebuilts/rust/.git
+          fi
 
-          echo "=== Disk space after sparse-cloning toolchains and removing toolchain .git ==="
+          echo "=== Disk space after toolchain setup ==="
           df -h /
 
       - name: Full Build - Setup Device Tree & Overlay
@@ -136,10 +151,18 @@ jobs:
       - name: Full Build - Compile Recovery Image
         if: ${{ !inputs.dry_run }}
         run: |
+          echo "=== Tuning kernel swap aggressiveness ==="
+          sudo sysctl -w vm.swappiness=10
+
+          echo "=== Granting OOM-killer immunity to GitHub Actions Runner ==="
+          for pid in $(pgrep -f "Runner\.(Listener|Worker)"); do
+            echo -1000 | sudo tee /proc/$pid/oom_score_adj >/dev/null || true
+          done
+
           cd /home/runner/twrp_src
-          echo "=== Disk space before compilation ==="
-          df -h /
+          echo "=== Memory & Disk status before compilation ==="
           free -h
+          df -h /
 
           echo "=== Top 20 space consumers in twrp_src ==="
           du -xh --max-depth=2 /home/runner/twrp_src | sort -hr | head -n 20
@@ -148,17 +171,19 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export USE_CCACHE=0
           export CCACHE_DISABLE=1
+          export GOMEMLIMIT=12GiB
+          export GOGC=50
           lunch twrp_sm8550-aosp_current-eng
 
           JOBS="${{ inputs.build_jobs }}"
           if [ "$JOBS" = "0" ] || [ -z "$JOBS" ]; then
-            JOBS=$(nproc --all)
-            if [ "$JOBS" -gt 3 ]; then JOBS=3; fi
+            JOBS=2
           fi
-          echo "Building recoveryimage with -j$JOBS (ccache disabled)..."
-          (while true; do sleep 120; echo "=== Build progress $(date) ==="; free -h; df -h /; done) &
+          if [ "$JOBS" -gt 2 ]; then JOBS=2; fi
+          echo "Building recoveryimage with -j$JOBS (nice -n 19 ionice -c 3 m)..."
+          (while true; do echo "=== Build progress $(date) ==="; free -h; df -h / | tail -1; ps -eo pid,comm,%mem,rss --sort=-rss | head -n 6; sleep 60; done) &
           BUILD_LOG_PID=$!
-          mka recoveryimage -j"$JOBS"
+          nice -n 19 ionice -c 3 m -j"$JOBS" recoveryimage
           kill $BUILD_LOG_PID 2>/dev/null || true
 
       - name: Full Build - Verify Built Image
@@ -176,3 +201,15 @@ jobs:
           name: twrp-pgem10-recovery
           path: /home/runner/twrp_src/out/target/product/sm8550/recovery.img
           if-no-files-found: error
+
+      - name: Full Build - Upload Build Logs
+        if: always() && !inputs.dry_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-build-logs-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            /home/runner/twrp_src/out/error.log
+            /home/runner/twrp_src/out/verbose.log.gz
+            /home/runner/twrp_src/out/soong.log
+            /home/runner/twrp_src/out/build.log
