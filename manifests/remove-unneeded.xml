@@ -207,7 +207,6 @@
   <remove-project name="platform/system/timezone" />
   <remove-project name="platform/system/usb_info_tools" />
   <remove-project name="platform/system/zygote" />
-  <remove-project name="platform/test/app_compat/csuite" />
   <remove-project name="platform/test/dittosuite" />
   <remove-project name="platform/test/robolectric-extensions" />
   <remove-project name="platform/test/suite_harness" />
