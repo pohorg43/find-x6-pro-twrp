@@ -95,34 +95,46 @@ jobs:
       - name: Full Build - Sync TWRP Manifest
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "=== Disk space before repo sync ==="
-          df -h
+          mkdir -p /home/runner/twrp_src
+          cd /home/runner/twrp_src
+          echo "=== Disk space before repo init & sync ==="
+          df -h /
           echo "=== Initializing repo manifest ==="
           repo init -u "$REF_MANIFEST_A16" -b "$REF_MANIFEST_BRANCH" --depth=1
           echo "=== Syncing source ==="
-          repo sync --current-branch --no-tags --no-clone-bundle --optimized-fetch --prune -j$(nproc --all)
+          (while true; do sleep 60; echo "=== Sync progress $(date) ==="; df -h /; done) &
+          SYNC_LOG_PID=$!
+          repo sync --current-branch --no-clone-bundle --no-tags --optimized-fetch --force-sync -j$(nproc)
+          kill $SYNC_LOG_PID 2>/dev/null || true
+          echo "=== Sync complete. Freeing disk space: removing .repo ==="
+          rm -rf .repo
+          echo "=== Disk space after removing .repo ==="
+          df -h /
 
       - name: Full Build - Setup Device Tree & Overlay
         if: ${{ !inputs.dry_run }}
         run: |
+          cd /home/runner/twrp_src
           git clone "$REF_TREE_SM8550" device/oplus/sm8550
           git -C device/oplus/sm8550 checkout "$REF_TREE_SM8550_SHA"
-          bash scripts/ci/apply-overlay.sh device/oplus/sm8550
-          bash scripts/ci/validate-device.sh device/oplus/sm8550
+          bash "$GITHUB_WORKSPACE/scripts/ci/apply-overlay.sh" device/oplus/sm8550
+          bash "$GITHUB_WORKSPACE/scripts/ci/validate-device.sh" device/oplus/sm8550
 
       - name: Full Build - Prune Unused Trees
         if: ${{ !inputs.dry_run }}
         run: |
+          cd /home/runner/twrp_src
           echo "Pruning heavy unused trees..."
           rm -rf cts test/suite_harness tools/tradefederation tools/loganalysis hardware/google/aemu system/secretkeeper packages/modules/AdServices
           echo "=== Disk space after pruning ==="
-          df -h
+          df -h /
 
       - name: Full Build - Compile Recovery Image
         if: ${{ !inputs.dry_run }}
         run: |
+          cd /home/runner/twrp_src
           echo "=== Disk space before compilation ==="
-          df -h
+          df -h /
           free -h
 
           source build/envsetup.sh
@@ -137,19 +149,23 @@ jobs:
             if [ "$JOBS" -gt 3 ]; then JOBS=3; fi
           fi
           echo "Building recoveryimage with -j$JOBS..."
+          (while true; do sleep 60; echo "=== Build progress $(date) ==="; free -h; done) &
+          BUILD_LOG_PID=$!
           mka recoveryimage -j"$JOBS"
+          kill $BUILD_LOG_PID 2>/dev/null || true
 
       - name: Full Build - Verify Built Image
         if: ${{ !inputs.dry_run }}
         run: |
+          cd /home/runner/twrp_src
           echo "=== Disk space after compilation ==="
-          df -h
-          bash scripts/ci/verify-image.sh out/target/product/sm8550/recovery.img
+          df -h /
+          bash "$GITHUB_WORKSPACE/scripts/ci/verify-image.sh" out/target/product/sm8550/recovery.img
 
       - name: Full Build - Upload Artifact
         if: ${{ !inputs.dry_run }}
         uses: actions/upload-artifact@v4
         with:
           name: twrp-pgem10-recovery
-          path: out/target/product/sm8550/recovery.img
+          path: /home/runner/twrp_src/out/target/product/sm8550/recovery.img
           if-no-files-found: error

@@ -1,56 +1,82 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== Native CI Disk Cleanup and Swap Setup ==="
+echo "=== Native CI Disk Cleanup and Memory Optimization ==="
 
-echo "--- Disk space before cleanup ---"
+echo "--- 1. Block devices layout (lsblk) ---"
+lsblk || true
+
+echo "--- 2. Disk space before cleanup ---"
 df -h
 
-echo "--- Removing unneeded toolchains & SDKs ---"
+echo "--- 3. Stopping docker services ---"
+sudo systemctl stop docker.service docker.socket containerd 2>/dev/null || true
+
+echo "--- 4. Aggressive cleanup of preinstalled runtimes and SDKs ---"
 sudo rm -rf \
     /usr/share/dotnet \
     /usr/local/lib/android \
     /opt/ghc \
-    /opt/hostedtoolcache/CodeQL \
+    /opt/hostedtoolcache \
     /usr/local/share/boost \
+    /usr/share/swift \
+    /usr/lib/jvm \
+    /usr/local/lib/node_modules \
+    /usr/local/share/chromium \
+    /usr/local/share/powershell \
+    /usr/local/graalvm \
+    /var/lib/docker \
+    /etc/docker \
+    /var/run/docker.sock \
+    /var/cache/apt/archives/* \
     /var/lib/apt/lists/* || true
 
-echo "--- Cleaning Docker cache ---"
-sudo docker system prune -af || true
-sudo rm -rf /var/lib/docker || true
+sudo apt-get clean 2>/dev/null || true
 
-echo "--- Setting up 14G swap ---"
-SWAP_DIR="/mnt"
+echo "--- 5. Configuring Swap: zram without consuming /dev/root ---"
+# Check if a separate ephemeral disk is mounted on /mnt with enough space
 FREE_MNT=$(df -BG /mnt 2>/dev/null | awk 'NR==2 {print $4}' | tr -d 'G' || echo "0")
-if [ -z "$FREE_MNT" ] || [ "$FREE_MNT" -lt 18 ]; then
-    echo "/mnt has less than 18G free ($FREE_MNT G), placing swapfile on /"
-    SWAP_DIR="/"
-else
-    echo "/mnt has $FREE_MNT G free, placing swapfile on /mnt"
-fi
-
-SWAP_FILE="$SWAP_DIR/swapfile"
-if [ ! -f "$SWAP_FILE" ]; then
-    echo "Allocating 14G swap at $SWAP_FILE..."
+if [ -n "$FREE_MNT" ] && [ "$FREE_MNT" -ge 20 ]; then
+    echo "Found separate /mnt with ${FREE_MNT}G free. Creating 14G swap on /mnt..."
+    SWAP_FILE="/mnt/swapfile"
     sudo fallocate -l 14G "$SWAP_FILE" || sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=14336
     sudo chmod 600 "$SWAP_FILE"
     sudo mkswap "$SWAP_FILE"
     sudo swapon "$SWAP_FILE"
+else
+    echo "No large separate /mnt. Setting up 12G zram swap (zero bytes used on /)..."
+    sudo modprobe zram num_devices=1 2>/dev/null || true
+    if [ -b /dev/zram0 ]; then
+        if grep -q zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
+            echo zstd | sudo tee /sys/block/zram0/comp_algorithm 2>/dev/null || true
+        elif grep -q lz4 /sys/block/zram0/comp_algorithm 2>/dev/null; then
+            echo lz4 | sudo tee /sys/block/zram0/comp_algorithm 2>/dev/null || true
+        fi
+        echo 12G | sudo tee /sys/block/zram0/disksize 2>/dev/null || true
+        sudo mkswap /dev/zram0
+        sudo swapon -p 100 /dev/zram0
+    else
+        echo "Direct /dev/zram0 failed, installing zram-tools..."
+        sudo apt-get install -y --no-install-recommends zram-tools 2>/dev/null || true
+        sudo sed -i 's/^#*PERCENT=.*/PERCENT=90/' /etc/default/zramswap 2>/dev/null || true
+        sudo systemctl restart zramswap 2>/dev/null || true
+    fi
 fi
 
-echo "--- Memory & Swap status ---"
+echo "--- 6. Memory & Swap status ---"
 free -h
-swapon --show
+swapon --show || true
 
-echo "--- Disk space after cleanup and swap ---"
-df -h
+echo "--- 7. Disk space on / after cleanup ---"
+df -h /
+
+echo "--- 8. Top 15 storage consumers in /usr, /opt, /var ---"
+sudo du -xh --max-depth=2 /usr /opt /var 2>/dev/null | sort -hr | head -n 15 || true
 
 ROOT_FREE=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
-echo "Available space on /: ${ROOT_FREE}G"
-if [ "$ROOT_FREE" -lt 50 ]; then
-    echo "WARNING: Root filesystem has ${ROOT_FREE}G free (< 50G target)."
+echo "=== Available space on /: ${ROOT_FREE}G ==="
+if [ "$ROOT_FREE" -lt 45 ]; then
+    echo "WARNING: Free space on / is ${ROOT_FREE}G (< 45G target)!"
 else
     echo "✓ Disk space verification PASSED: ${ROOT_FREE}G free on /"
 fi
-
-echo "=== Disk cleanup and swap setup complete ==="
