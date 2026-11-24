@@ -50,7 +50,7 @@ if [ -f "$BC" ]; then
     echo "Validating BoardConfig.mk patch results..."
     grep -q "synaptics_tcm2.ko" "$BC" || { echo "ERROR: synaptics_tcm2.ko missing from BoardConfig.mk" >&2; exit 1; }
     grep -q "panel_event_notifier.ko" "$BC" || { echo "ERROR: panel_event_notifier.ko missing from BoardConfig.mk" >&2; exit 1; }
-    grep -qE "PLATFORM_VERSION\s*:=\s*13.0.0" "$BC" || { echo "ERROR: PLATFORM_VERSION != 13.0.0 in BoardConfig.mk" >&2; exit 1; }
+    grep -qE "PLATFORM_VERSION\s*:=\s*13(\s|$)" "$BC" || { echo "ERROR: PLATFORM_VERSION != 13 in BoardConfig.mk" >&2; exit 1; }
     grep -qE "PLATFORM_SECURITY_PATCH\s*:=\s*2025-11-01" "$BC" || { echo "ERROR: PLATFORM_SECURITY_PATCH != 2025-11-01 in BoardConfig.mk" >&2; exit 1; }
     grep -q "BOARD_BOOT_HEADER_VERSION" "$BC" || { echo "ERROR: BOARD_BOOT_HEADER_VERSION missing in BoardConfig.mk" >&2; exit 1; }
     grep -q "BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE" "$BC" || { echo "ERROR: BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE missing in BoardConfig.mk" >&2; exit 1; }

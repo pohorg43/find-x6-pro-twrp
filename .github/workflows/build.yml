@@ -68,7 +68,7 @@ jobs:
           echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
           echo "- Patches applied cleanly: 0 *.rej files"
           echo "- Synaptics TCM2 module chain verified"
-          echo "- Clean header config: PLATFORM_VERSION=13.0.0 / PLATFORM_SECURITY_PATCH=2025-11-01"
+          echo "- Clean header config: PLATFORM_VERSION=13 / PLATFORM_SECURITY_PATCH=2025-11-01"
           echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
           echo "=================================================="
 
@@ -89,10 +89,10 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Cache target toolchains (Clang & Rust)
+      - name: Restore target toolchains cache (Clang & Rust)
         if: ${{ !inputs.dry_run }}
-        id: cache-toolchains
-        uses: actions/cache@v4
+        id: restore-toolchains
+        uses: actions/cache/restore@v4
         with:
           path: |
             /home/runner/twrp_src/prebuilts/clang/host/linux-x86
@@ -139,6 +139,15 @@ jobs:
           echo "=== Disk space after toolchain setup ==="
           df -h /
 
+      - name: Save target toolchains cache (Clang & Rust)
+        if: ${{ !inputs.dry_run && steps.restore-toolchains.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/runner/twrp_src/prebuilts/clang/host/linux-x86
+            /home/runner/twrp_src/prebuilts/rust
+          key: twrp16-toolchains-r547379-rust1.83.0
+
       - name: Full Build - Setup Device Tree & Overlay
         if: ${{ !inputs.dry_run }}
         run: |
@@ -171,8 +180,24 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export USE_CCACHE=0
           export CCACHE_DISABLE=1
-          export GOMEMLIMIT=12GiB
-          export GOGC=50
+          export SOONG_GOMEMLIMIT=13GiB
+          export GOMEMLIMIT=13GiB
+          export GOGC=30
+
+          echo "=== Patching build/blueprint/bootstrap/bootstrap.go to pass GOGC=30 and GOMEMLIMIT=13GiB through env -i ==="
+          cp build/blueprint/bootstrap/bootstrap.go /tmp/bootstrap.go.orig
+          python3 - <<'PYEOF'
+          from pathlib import Path
+          p = Path("build/blueprint/bootstrap/bootstrap.go")
+          src = p.read_text()
+          target = '`env -i $env "$$BUILDER" ` +'
+          replacement = '`env -i GOGC=30 GOMEMLIMIT=13GiB $env "$$BUILDER" ` +'
+          assert src.count(target) == 1, f"Unexpected match count: {src.count(target)}"
+          p.write_text(src.replace(target, replacement, 1))
+          PYEOF
+          diff -u /tmp/bootstrap.go.orig build/blueprint/bootstrap/bootstrap.go || [ $? -eq 1 ]
+          rm -f /tmp/bootstrap.go.orig
+
           lunch twrp_sm8550-aosp_current-eng
 
           JOBS="${{ inputs.build_jobs }}"

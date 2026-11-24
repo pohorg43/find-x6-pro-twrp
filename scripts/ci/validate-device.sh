@@ -38,11 +38,11 @@ for mod in synaptics_tcm2.ko panel_event_notifier.ko olc.ko oplus_bsp_tp_custom.
 done
 
 # 4. Header parameters check via PLATFORM_VERSION and PLATFORM_SECURITY_PATCH
-if ! grep -qE "PLATFORM_VERSION\s*:=\s*13.0.0" "$BC" || ! grep -qE "PLATFORM_SECURITY_PATCH\s*:=\s*2025-11-01" "$BC"; then
-    echo "ERROR: PLATFORM_VERSION / PLATFORM_SECURITY_PATCH mismatch in BoardConfig.mk (expected 13.0.0 / 2025-11-01)" >&2
+if ! grep -qE "PLATFORM_VERSION\s*:=\s*13(\s|$)" "$BC" || ! grep -qE "PLATFORM_SECURITY_PATCH\s*:=\s*2025-11-01" "$BC"; then
+    echo "ERROR: PLATFORM_VERSION / PLATFORM_SECURITY_PATCH mismatch in BoardConfig.mk (expected 13 / 2025-11-01)" >&2
     exit 1
 fi
-echo "✓ Canonical header config validated: PLATFORM_VERSION=13.0.0 and PLATFORM_SECURITY_PATCH=2025-11-01"
+echo "✓ Canonical header config validated: PLATFORM_VERSION=13 and PLATFORM_SECURITY_PATCH=2025-11-01"
 
 # 5. Remote manifest accessibility check
 MANIFEST_URL="${REF_MANIFEST_A16:-https://github.com/TWRP-Test/platform_manifest_twrp_aosp}"

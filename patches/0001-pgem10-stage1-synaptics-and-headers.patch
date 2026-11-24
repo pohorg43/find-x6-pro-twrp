@@ -7,7 +7,7 @@ index 8a37a9d..b233a76 100644
  
  # Security patches
 -PLATFORM_VERSION                := 99.87.36
-+PLATFORM_VERSION                := 13.0.0
++PLATFORM_VERSION                := 13
  PLATFORM_VERSION_LAST_STABLE    := $(PLATFORM_VERSION)
 -PLATFORM_SECURITY_PATCH         := 2099-12-31
 +PLATFORM_SECURITY_PATCH         := 2025-11-01

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <!-- Keep only Clang and Rust toolchain exclusions for sparse-checkout cloning -->
+  <!-- Keep only Clang, Rust (for sparse-checkout cloning), and CTS (twrp-default maps path="cts" to android_cts) -->
   <!-- All other AOSP projects are retained to preserve Soong dependency graph integrity -->
   <remove-project name="platform/prebuilts/clang/host/linux-x86" />
   <remove-project name="platform/prebuilts/rust" />
+  <remove-project path="cts" />
 </manifest>
