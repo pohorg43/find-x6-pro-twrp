@@ -44,14 +44,31 @@ with open("$IMAGE_PATH", "rb") as f:
     os_ver_str = f"{os_a}.{os_b}.{os_c}"
     patch_str = f"{patch_year:04d}-{patch_month:02d}"
 
+    print("--- Recovery Image Header Details ---")
     print(f"Header Version: {header_version}")
-    print(f"Kernel Size: {kernel_size}")
-    print(f"Ramdisk Size: {ramdisk_size}")
-    print(f"OS Version: {os_ver_str}")
+    print(f"Kernel Size:    {kernel_size} bytes")
+    print(f"Ramdisk Size:   {ramdisk_size} bytes")
+    print(f"OS Version:     {os_ver_str}")
     print(f"OS Patch Level: {patch_str}")
+
+    # Check ramdisk format at offset 4096 (since kernel_size == 0)
+    f.seek(4096)
+    rd_magic = f.read(4)
+    if rd_magic == b"\x02\x21\x4c\x18":
+        rd_fmt = "lz4_legacy (0x184c2102)"
+    elif rd_magic == b"\x04\x22\x4d\x18":
+        rd_fmt = "lz4 (standard 0x184d2204)"
+    elif rd_magic[:2] == b"\x1f\x8b":
+        rd_fmt = "gzip"
+    else:
+        rd_fmt = f"unknown (magic: {rd_magic.hex()})"
+    print(f"Ramdisk Format: {rd_fmt}")
 
     if header_version != 4:
         print(f"ERROR: Expected header_version 4, got {header_version}", file=sys.stderr)
+        sys.exit(1)
+    if kernel_size != 0:
+        print(f"ERROR: Expected kernel_size 0 (BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE), got {kernel_size}", file=sys.stderr)
         sys.exit(1)
     if os_ver_str != "13.0.0":
         print(f"ERROR: Expected OS version 13.0.0, got {os_ver_str}", file=sys.stderr)
@@ -60,7 +77,7 @@ with open("$IMAGE_PATH", "rb") as f:
         print(f"ERROR: Expected patch level 2025-11, got {patch_str}", file=sys.stderr)
         sys.exit(1)
 
-    print("✓ Header v4 validation PASSED (13.0.0 / 2025-11)!")
+    print("✓ All Header v4 and Ramdisk validations PASSED!")
 PYEOF
 
 echo "=== All recovery image checks PASSED ==="

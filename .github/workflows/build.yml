@@ -64,7 +64,7 @@ jobs:
           echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
           echo "- Patches applied cleanly: 0 *.rej files"
           echo "- Synaptics TCM2 module chain verified"
-          echo "- Clean header config: PLATFORM_VERSION=13.0.0 / PLATFORM_SECURITY_PATCH=2025-11-01 (no duplicates)"
+          echo "- Clean header config: PLATFORM_VERSION=13.0.0 / PLATFORM_SECURITY_PATCH=2025-11-01"
           echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
           echo "=================================================="
 
@@ -81,7 +81,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
-          sudo apt-get install -y repo ccache git python3 libncurses5
+          sudo apt-get install -y --no-install-recommends repo ccache git-lfs lz4 libncurses6 bc bison flex libssl-dev
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -142,6 +142,8 @@ jobs:
       - name: Full Build - Verify Built Image
         if: ${{ !inputs.dry_run }}
         run: |
+          echo "=== Disk space after compilation ==="
+          df -h
           bash scripts/ci/verify-image.sh out/target/product/sm8550/recovery.img
 
       - name: Full Build - Upload Artifact
