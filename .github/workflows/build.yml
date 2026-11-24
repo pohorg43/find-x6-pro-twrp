@@ -85,16 +85,9 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends repo ccache git-lfs lz4 libncurses6 bc bison flex libssl-dev
+          sudo apt-get install -y --no-install-recommends repo git-lfs lz4 libncurses6 bc bison flex libssl-dev
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Full Build - Setup ccache
-        if: ${{ !inputs.dry_run }}
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          create-symlink: true
-          update-package-index: false
 
       - name: Full Build - Sync TWRP Manifest
         if: ${{ !inputs.dry_run }}
@@ -157,10 +150,13 @@ jobs:
           df -h /
           free -h
 
+          echo "=== Top 20 space consumers in twrp_src ==="
+          du -xh --max-depth=2 /home/runner/twrp_src | sort -hr | head -n 20
+
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
-          export USE_CCACHE=1
-          export CCACHE_EXEC=$(command -v ccache)
+          export USE_CCACHE=0
+          export CCACHE_DISABLE=1
           lunch twrp_sm8550-aosp_current-eng
 
           JOBS="${{ inputs.build_jobs }}"
@@ -168,8 +164,8 @@ jobs:
             JOBS=$(nproc --all)
             if [ "$JOBS" -gt 3 ]; then JOBS=3; fi
           fi
-          echo "Building recoveryimage with -j$JOBS..."
-          (while true; do sleep 60; echo "=== Build progress $(date) ==="; free -h; done) &
+          echo "Building recoveryimage with -j$JOBS (ccache disabled)..."
+          (while true; do sleep 120; echo "=== Build progress $(date) ==="; free -h; df -h /; done) &
           BUILD_LOG_PID=$!
           mka recoveryimage -j"$JOBS"
           kill $BUILD_LOG_PID 2>/dev/null || true

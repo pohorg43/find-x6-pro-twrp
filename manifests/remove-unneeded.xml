@@ -24,8 +24,6 @@
   <remove-project name="platform/external/dng_sdk" />
   <remove-project name="platform/external/error_prone" />
   <remove-project name="platform/external/federated-compute" />
-  <remove-project name="platform/external/go-cmp" />
-  <remove-project name="platform/external/golang-protobuf" />
   <remove-project name="platform/external/grpc-grpc" />
   <remove-project name="platform/external/grpc-grpc-java" />
   <remove-project name="platform/external/gson" />
@@ -112,7 +110,6 @@
   <remove-project name="platform/external/sdv/vsomeip" />
   <remove-project name="platform/external/setfilters" />
   <remove-project name="platform/external/spdx-tools" />
-  <remove-project name="platform/external/starlark-go" />
   <remove-project name="platform/external/stg" />
   <remove-project name="platform/external/strace" />
   <remove-project name="platform/external/tflite-support" />
