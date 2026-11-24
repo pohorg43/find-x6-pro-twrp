@@ -41,6 +41,10 @@ jobs:
       - name: Dry Run - Setup Device Tree
         if: ${{ inputs.dry_run }}
         run: |
+          echo "=== Block devices (lsblk) ==="
+          lsblk || true
+          echo "=== Mounted filesystems (df -h) ==="
+          df -h || true
           echo "=== Setting up device tree at SHA $REF_TREE_SM8550_SHA ==="
           git clone "$REF_TREE_SM8550" device/oplus/sm8550
           git -C device/oplus/sm8550 checkout "$REF_TREE_SM8550_SHA"
