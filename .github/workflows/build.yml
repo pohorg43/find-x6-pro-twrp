@@ -118,6 +118,19 @@ jobs:
           echo "=== Disk space after removing .repo ==="
           df -h /
 
+          echo "=== Sparse-cloning target Clang (clang-r547379) at tag android-16.0.0_r1 ==="
+          git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
+          git -C prebuilts/clang/host/linux-x86 sparse-checkout set clang-r547379 clang-stable soong profiles
+          rm -rf prebuilts/clang/host/linux-x86/.git
+
+          echo "=== Sparse-cloning target Rust (1.83.0 / linux-x86) at tag android-16.0.0_r1 ==="
+          git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/rust prebuilts/rust
+          git -C prebuilts/rust sparse-checkout set linux-x86/1.83.0 linux-x86/stable soong
+          rm -rf prebuilts/rust/.git
+
+          echo "=== Disk space after sparse-cloning toolchains and removing toolchain .git ==="
+          df -h /
+
       - name: Full Build - Setup Device Tree & Overlay
         if: ${{ !inputs.dry_run }}
         run: |

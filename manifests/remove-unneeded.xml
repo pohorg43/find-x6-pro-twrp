@@ -177,6 +177,7 @@
   <remove-project name="platform/prebuilts/abi-dumps/platform" />
   <remove-project name="platform/prebuilts/abi-dumps/vndk" />
   <remove-project name="platform/prebuilts/bazel/darwin-x86_64" />
+  <remove-project name="platform/prebuilts/clang/host/linux-x86" />
   <remove-project name="platform/prebuilts/gradle-plugin" />
   <remove-project name="platform/prebuilts/jdk/jdk8" />
   <remove-project name="platform/prebuilts/module_sdk/AdServices" />
@@ -195,6 +196,7 @@
   <remove-project name="platform/prebuilts/vndk/v32" />
   <remove-project name="platform/prebuilts/vndk/v33" />
   <remove-project name="platform/prebuilts/vndk/v34" />
+  <remove-project name="platform/prebuilts/rust" />
   <remove-project name="platform/sdk" />
   <remove-project name="platform/system/authgraph" />
   <remove-project name="platform/system/ca-certificates" />
