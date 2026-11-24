@@ -50,11 +50,17 @@ if [ -f "$BC" ]; then
     echo "Validating BoardConfig.mk patch results..."
     grep -q "synaptics_tcm2.ko" "$BC" || { echo "ERROR: synaptics_tcm2.ko missing from BoardConfig.mk" >&2; exit 1; }
     grep -q "panel_event_notifier.ko" "$BC" || { echo "ERROR: panel_event_notifier.ko missing from BoardConfig.mk" >&2; exit 1; }
-    grep -q -- "--os_version 13.0.0" "$BC" || { echo "ERROR: os_version 13.0.0 missing from BoardConfig.mk" >&2; exit 1; }
-    grep -q -- "--os_patch_level 2025-11" "$BC" || { echo "ERROR: os_patch_level 2025-11 missing from BoardConfig.mk" >&2; exit 1; }
+    grep -qE "PLATFORM_VERSION\s*:=\s*13.0.0" "$BC" || { echo "ERROR: PLATFORM_VERSION != 13.0.0 in BoardConfig.mk" >&2; exit 1; }
+    grep -qE "PLATFORM_SECURITY_PATCH\s*:=\s*2025-11-01" "$BC" || { echo "ERROR: PLATFORM_SECURITY_PATCH != 2025-11-01 in BoardConfig.mk" >&2; exit 1; }
     grep -q "BOARD_BOOT_HEADER_VERSION" "$BC" || { echo "ERROR: BOARD_BOOT_HEADER_VERSION missing in BoardConfig.mk" >&2; exit 1; }
     grep -q "BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE" "$BC" || { echo "ERROR: BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE missing in BoardConfig.mk" >&2; exit 1; }
-    echo "All BoardConfig.mk patch verifications passed!"
+    
+    # Check for NO duplicate --os_version in BOARD_MKBOOTIMG_ARGS
+    if grep "BOARD_MKBOOTIMG_ARGS" "$BC" | grep -q -- "--os_version"; then
+        echo "ERROR: Redundant --os_version found in BOARD_MKBOOTIMG_ARGS! Should rely cleanly on PLATFORM_VERSION." >&2
+        exit 1
+    fi
+    echo "All BoardConfig.mk patch verifications passed cleanly (no duplicates)!"
 fi
 
 echo "=== Overlay and patches applied successfully ==="

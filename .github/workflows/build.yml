@@ -64,7 +64,7 @@ jobs:
           echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
           echo "- Patches applied cleanly: 0 *.rej files"
           echo "- Synaptics TCM2 module chain verified"
-          echo "- Recovery header 13.0.0 / 2025-11 verified"
+          echo "- Clean header config: PLATFORM_VERSION=13.0.0 / PLATFORM_SECURITY_PATCH=2025-11-01 (no duplicates)"
           echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
           echo "=================================================="
 
@@ -95,6 +95,8 @@ jobs:
       - name: Full Build - Sync TWRP Manifest
         if: ${{ !inputs.dry_run }}
         run: |
+          echo "=== Disk space before repo sync ==="
+          df -h
           echo "=== Initializing repo manifest ==="
           repo init -u "$REF_MANIFEST_A16" -b "$REF_MANIFEST_BRANCH" --depth=1
           echo "=== Syncing source ==="
@@ -113,12 +115,20 @@ jobs:
         run: |
           echo "Pruning heavy unused trees..."
           rm -rf cts test/suite_harness tools/tradefederation tools/loganalysis hardware/google/aemu system/secretkeeper packages/modules/AdServices
+          echo "=== Disk space after pruning ==="
           df -h
 
       - name: Full Build - Compile Recovery Image
         if: ${{ !inputs.dry_run }}
         run: |
+          echo "=== Disk space before compilation ==="
+          df -h
+          free -h
+
           source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(command -v ccache)
           lunch twrp_sm8550-aosp_current-eng
 
           JOBS="${{ inputs.build_jobs }}"

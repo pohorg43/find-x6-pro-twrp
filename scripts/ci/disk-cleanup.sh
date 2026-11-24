@@ -19,9 +19,6 @@ echo "--- Cleaning Docker cache ---"
 sudo docker system prune -af || true
 sudo rm -rf /var/lib/docker || true
 
-echo "--- Disk space after cleanup ---"
-df -h
-
 echo "--- Setting up 14G swap ---"
 SWAP_DIR="/mnt"
 FREE_MNT=$(df -BG /mnt 2>/dev/null | awk 'NR==2 {print $4}' | tr -d 'G' || echo "0")
@@ -44,5 +41,16 @@ fi
 echo "--- Memory & Swap status ---"
 free -h
 swapon --show
+
+echo "--- Disk space after cleanup and swap ---"
+df -h
+
+ROOT_FREE=$(df -BG / | awk 'NR==2 {print $4}' | tr -d 'G')
+echo "Available space on /: ${ROOT_FREE}G"
+if [ "$ROOT_FREE" -lt 50 ]; then
+    echo "WARNING: Root filesystem has ${ROOT_FREE}G free (< 50G target)."
+else
+    echo "✓ Disk space verification PASSED: ${ROOT_FREE}G free on /"
+fi
 
 echo "=== Disk cleanup and swap setup complete ==="
