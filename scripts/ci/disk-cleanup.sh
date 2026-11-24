@@ -9,12 +9,17 @@ lsblk || true
 echo "--- 2. Disk space before cleanup ---"
 df -h
 
-echo "--- 3. Stopping docker/snap services and removing root swap ---"
-sudo systemctl stop docker.service docker.socket containerd snapd 2>/dev/null || true
+echo "--- 3. Stopping docker/containerd/snap services and removing pre-existing swap ---"
+sudo systemctl stop docker.service docker.socket containerd.service containerd snapd 2>/dev/null || true
 if [ -f /swapfile ]; then
     echo "Disabling and removing pre-existing /swapfile on /..."
     sudo swapoff /swapfile 2>/dev/null || true
     sudo rm -f /swapfile 2>/dev/null || true
+fi
+if [ -f /mnt/swapfile ]; then
+    echo "Disabling and removing pre-existing /mnt/swapfile..."
+    sudo swapoff /mnt/swapfile 2>/dev/null || true
+    sudo rm -f /mnt/swapfile 2>/dev/null || true
 fi
 
 echo "--- 4. Aggressive cleanup of preinstalled runtimes and SDKs ---"
@@ -33,11 +38,15 @@ sudo rm -rf \
     /usr/local/.ghcup \
     /usr/local/aws-cli \
     /usr/local/aws-sam-cli \
+    /usr/lib/google-cloud-sdk \
+    /opt/az \
+    /opt/microsoft \
     /usr/share/doc \
     /usr/share/man \
     /var/lib/snapd \
     /snap \
     /var/lib/docker \
+    /var/lib/containerd \
     /etc/docker \
     /var/run/docker.sock \
     /var/cache/apt/archives/* \
@@ -45,35 +54,20 @@ sudo rm -rf \
 
 sudo apt-get clean 2>/dev/null || true
 
-echo "--- 5. Configuring Swap: zram without consuming /dev/root ---"
-# Check if a separate ephemeral disk is mounted on /mnt with enough space
-FREE_MNT=$(df -BG /mnt 2>/dev/null | awk 'NR==2 {print $4}' | tr -d 'G' || echo "0")
-if [ -n "$FREE_MNT" ] && [ "$FREE_MNT" -ge 20 ]; then
-    echo "Found separate /mnt with ${FREE_MNT}G free. Creating 14G swap on /mnt..."
+echo "--- 5. Configuring 12G Disk Swap (kexi1412 OOM prevention recipe) ---"
+if mountpoint -q /mnt; then
+    echo "Found dedicated mountpoint at /mnt. Placing swapfile on /mnt..."
     SWAP_FILE="/mnt/swapfile"
-    sudo fallocate -l 14G "$SWAP_FILE" || sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=14336
-    sudo chmod 600 "$SWAP_FILE"
-    sudo mkswap "$SWAP_FILE"
-    sudo swapon "$SWAP_FILE"
 else
-    echo "No large separate /mnt. Setting up 12G zram swap (zero bytes used on /)..."
-    sudo modprobe zram num_devices=1 2>/dev/null || true
-    if [ -b /dev/zram0 ]; then
-        if grep -q zstd /sys/block/zram0/comp_algorithm 2>/dev/null; then
-            echo zstd | sudo tee /sys/block/zram0/comp_algorithm 2>/dev/null || true
-        elif grep -q lz4 /sys/block/zram0/comp_algorithm 2>/dev/null; then
-            echo lz4 | sudo tee /sys/block/zram0/comp_algorithm 2>/dev/null || true
-        fi
-        echo 12G | sudo tee /sys/block/zram0/disksize 2>/dev/null || true
-        sudo mkswap /dev/zram0
-        sudo swapon -p 100 /dev/zram0
-    else
-        echo "Direct /dev/zram0 failed, installing zram-tools..."
-        sudo apt-get install -y --no-install-recommends zram-tools 2>/dev/null || true
-        sudo sed -i 's/^#*PERCENT=.*/PERCENT=90/' /etc/default/zramswap 2>/dev/null || true
-        sudo systemctl restart zramswap 2>/dev/null || true
-    fi
+    echo "No separate mountpoint on /mnt. Placing swapfile on /..."
+    SWAP_FILE="/swapfile"
 fi
+
+echo "Creating 12G disk swapfile at $SWAP_FILE..."
+sudo fallocate -l 12G "$SWAP_FILE" || sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=12288
+sudo chmod 600 "$SWAP_FILE"
+sudo mkswap "$SWAP_FILE"
+sudo swapon "$SWAP_FILE"
 
 echo "--- 6. Memory & Swap status ---"
 free -h

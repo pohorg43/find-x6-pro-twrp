@@ -133,15 +133,6 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/apply-overlay.sh" device/oplus/sm8550
           bash "$GITHUB_WORKSPACE/scripts/ci/validate-device.sh" device/oplus/sm8550
 
-      - name: Full Build - Prune Unused Trees
-        if: ${{ !inputs.dry_run }}
-        run: |
-          cd /home/runner/twrp_src
-          echo "Pruning heavy unused trees and SDK stub generators..."
-          rm -rf cts test/suite_harness tools/tradefederation tools/loganalysis hardware/google/aemu system/secretkeeper packages/modules/AdServices frameworks/base/api
-          echo "=== Disk space after pruning ==="
-          df -h /
-
       - name: Full Build - Compile Recovery Image
         if: ${{ !inputs.dry_run }}
         run: |
