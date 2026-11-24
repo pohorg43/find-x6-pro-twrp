@@ -51,4 +51,15 @@ echo "Checking remote manifest: $MANIFEST_URL ($MANIFEST_BRANCH)..."
 git ls-remote --exit-code "$MANIFEST_URL" "refs/heads/$MANIFEST_BRANCH" >/dev/null
 echo "✓ Manifest branch $MANIFEST_BRANCH exists and is reachable!"
 
+# 6. Validate local prune manifest
+PRUNE_MANIFEST="$REPO_ROOT/manifests/remove-unneeded.xml"
+if [ -f "$PRUNE_MANIFEST" ]; then
+    python3 -c "import xml.etree.ElementTree as ET; ET.parse('$PRUNE_MANIFEST')"
+    PRUNE_COUNT=$(grep -c "<remove-project" "$PRUNE_MANIFEST")
+    echo "✓ manifests/remove-unneeded.xml syntax validated ($PRUNE_COUNT projects pruned)"
+else
+    echo "ERROR: manifests/remove-unneeded.xml not found!" >&2
+    exit 1
+fi
+
 echo "=== All device validations PASSED ==="

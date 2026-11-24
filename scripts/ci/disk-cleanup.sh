@@ -9,8 +9,13 @@ lsblk || true
 echo "--- 2. Disk space before cleanup ---"
 df -h
 
-echo "--- 3. Stopping docker services ---"
-sudo systemctl stop docker.service docker.socket containerd 2>/dev/null || true
+echo "--- 3. Stopping docker/snap services and removing root swap ---"
+sudo systemctl stop docker.service docker.socket containerd snapd 2>/dev/null || true
+if [ -f /swapfile ]; then
+    echo "Disabling and removing pre-existing /swapfile on /..."
+    sudo swapoff /swapfile 2>/dev/null || true
+    sudo rm -f /swapfile 2>/dev/null || true
+fi
 
 echo "--- 4. Aggressive cleanup of preinstalled runtimes and SDKs ---"
 sudo rm -rf \
@@ -25,6 +30,13 @@ sudo rm -rf \
     /usr/local/share/chromium \
     /usr/local/share/powershell \
     /usr/local/graalvm \
+    /usr/local/.ghcup \
+    /usr/local/aws-cli \
+    /usr/local/aws-sam-cli \
+    /usr/share/doc \
+    /usr/share/man \
+    /var/lib/snapd \
+    /snap \
     /var/lib/docker \
     /etc/docker \
     /var/run/docker.sock \

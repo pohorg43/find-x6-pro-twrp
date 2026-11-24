@@ -100,7 +100,10 @@ jobs:
           echo "=== Disk space before repo init & sync ==="
           df -h /
           echo "=== Initializing repo manifest ==="
-          repo init -u "$REF_MANIFEST_A16" -b "$REF_MANIFEST_BRANCH" --depth=1
+          repo init -u "$REF_MANIFEST_A16" -b "$REF_MANIFEST_BRANCH" --depth=1 --groups=default,-mips,-darwin,-notdefault
+          echo "=== Installing local prune manifest ==="
+          mkdir -p .repo/local_manifests
+          cp "$GITHUB_WORKSPACE/manifests/remove-unneeded.xml" .repo/local_manifests/
           echo "=== Syncing source ==="
           (while true; do sleep 60; echo "=== Sync progress $(date) ==="; df -h /; done) &
           SYNC_LOG_PID=$!
