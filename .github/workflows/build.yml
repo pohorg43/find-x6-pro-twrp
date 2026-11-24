@@ -139,6 +139,8 @@ jobs:
           cd /home/runner/twrp_src
           echo "Pruning heavy unused trees..."
           rm -rf cts test/suite_harness tools/tradefederation tools/loganalysis hardware/google/aemu system/secretkeeper packages/modules/AdServices
+          echo "Breaking bootclasspath cycle in frameworks/base/api/Android.bp..."
+          sed -i '/"framework-connectivity-b",/d' frameworks/base/api/Android.bp
           echo "=== Disk space after pruning ==="
           df -h /
 
