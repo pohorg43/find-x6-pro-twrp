@@ -9,9 +9,9 @@ on:
         type: boolean
         default: true
       build_jobs:
-        description: "Parallel build jobs (capped at 2 to protect memory)"
+        description: "Parallel build jobs (0 = auto nproc)"
         required: false
-        default: "2"
+        default: "0"
 
 jobs:
   twrp-ci:
@@ -97,7 +97,7 @@ jobs:
           path: |
             /home/runner/twrp_src/prebuilts/clang/host/linux-x86
             /home/runner/twrp_src/prebuilts/rust
-          key: twrp16-toolchains-r547379-rust1.83.0
+          key: twrp16-toolchains-r547379-r530567-rust1.83.0
 
       - name: Full Build - Sync TWRP Manifest
         if: ${{ !inputs.dry_run }}
@@ -121,13 +121,13 @@ jobs:
           echo "=== Disk space after removing .repo ==="
           df -h /
 
-          if [ -f "prebuilts/clang/host/linux-x86/clang-r547379/bin/clang" ] && [ -d "prebuilts/rust/linux-x86/1.83.0" ]; then
+          if [ -f "prebuilts/clang/host/linux-x86/clang-r547379/bin/clang" ] && [ -f "prebuilts/clang/host/linux-x86/clang-r530567/lib/libclang.so" ] && [ -d "prebuilts/rust/linux-x86/1.83.0" ]; then
             echo "=== Target toolchains restored from cache, skipping sparse clone ==="
           else
-            echo "=== Cache miss or incomplete toolchains. Sparse-cloning target Clang (clang-r547379) ==="
+            echo "=== Cache miss or incomplete toolchains. Sparse-cloning target Clang (clang-r547379 + clang-r530567) ==="
             rm -rf prebuilts/clang/host/linux-x86 prebuilts/rust
             git clone --depth=1 --branch android-16.0.0_r1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 prebuilts/clang/host/linux-x86
-            git -C prebuilts/clang/host/linux-x86 sparse-checkout set clang-r547379 clang-stable soong profiles
+            git -C prebuilts/clang/host/linux-x86 sparse-checkout set clang-r547379 clang-r530567 clang-stable llvm-binutils-stable soong profiles
             rm -rf prebuilts/clang/host/linux-x86/.git
 
             echo "=== Sparse-cloning target Rust (1.83.0 / linux-x86) at tag android-16.0.0_r1 ==="
@@ -146,7 +146,7 @@ jobs:
           path: |
             /home/runner/twrp_src/prebuilts/clang/host/linux-x86
             /home/runner/twrp_src/prebuilts/rust
-          key: twrp16-toolchains-r547379-rust1.83.0
+          key: twrp16-toolchains-r547379-r530567-rust1.83.0
 
       - name: Full Build - Setup Device Tree & Overlay
         if: ${{ !inputs.dry_run }}
@@ -202,9 +202,8 @@ jobs:
 
           JOBS="${{ inputs.build_jobs }}"
           if [ "$JOBS" = "0" ] || [ -z "$JOBS" ]; then
-            JOBS=2
+            JOBS=$(nproc --all)
           fi
-          if [ "$JOBS" -gt 2 ]; then JOBS=2; fi
           echo "Building recoveryimage with -j$JOBS (nice -n 19 ionice -c 3 m)..."
           (while true; do echo "=== Build progress $(date) ==="; free -h; df -h / | tail -1; ps -eo pid,comm,%mem,rss --sort=-rss | head -n 6; sleep 60; done) &
           BUILD_LOG_PID=$!
