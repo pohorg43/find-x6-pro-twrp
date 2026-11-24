@@ -213,7 +213,6 @@
   <remove-project name="platform/test/suite_harness" />
   <remove-project name="platform/test/vts" />
   <remove-project name="platform/test/vts-testcase/hal" />
-  <remove-project name="toolchain/pgo-profiles" />
   <remove-project name="platform/tools/apksig" />
   <remove-project name="platform/tools/content_addressed_storage/prebuilts" />
   <remove-project name="platform/tools/deviceinfra/prebuilts" />
