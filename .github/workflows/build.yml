@@ -1,0 +1,143 @@
+name: TWRP Build CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Fast dry-run validation (no full AOSP sync/build)"
+        required: true
+        type: boolean
+        default: true
+      build_jobs:
+        description: "Parallel build jobs (0 = auto, capped at 3)"
+        required: false
+        default: "0"
+
+jobs:
+  twrp-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout meta-repository
+        uses: actions/checkout@v4
+
+      - name: Load specifications
+        run: |
+          source ci/twrp-spec.env
+          echo "REF_TREE_SM8550=$REF_TREE_SM8550" >> "$GITHUB_ENV"
+          echo "REF_TREE_SM8550_SHA=$REF_TREE_SM8550_SHA" >> "$GITHUB_ENV"
+          echo "REF_MANIFEST_A16=$REF_MANIFEST_A16" >> "$GITHUB_ENV"
+          echo "REF_MANIFEST_BRANCH=$REF_MANIFEST_BRANCH" >> "$GITHUB_ENV"
+          echo "DEVICE_CODENAME=$DEVICE_CODENAME" >> "$GITHUB_ENV"
+          echo "PLATFORM=$PLATFORM" >> "$GITHUB_ENV"
+          echo "BOARD_NAME=$BOARD_NAME" >> "$GITHUB_ENV"
+
+      # ==========================================
+      # FAST DRY RUN (dry_run == true)
+      # ==========================================
+      - name: Dry Run - Setup Device Tree
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "=== Setting up device tree at SHA $REF_TREE_SM8550_SHA ==="
+          git clone "$REF_TREE_SM8550" device/oplus/sm8550
+          git -C device/oplus/sm8550 checkout "$REF_TREE_SM8550_SHA"
+
+      - name: Dry Run - Apply Overlay and Patches
+        if: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/ci/apply-overlay.sh device/oplus/sm8550
+
+      - name: Dry Run - Validate Device Tree and Manifest
+        if: ${{ inputs.dry_run }}
+        run: |
+          bash scripts/ci/validate-device.sh device/oplus/sm8550
+
+      - name: Dry Run - Summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "=================================================="
+          echo "DRY RUN PASSED: Device tree is valid for PGEM10!"
+          echo "- Target: OPPO Find X6 Pro ($DEVICE_CODENAME / $PLATFORM)"
+          echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
+          echo "- Patches applied cleanly: 0 *.rej files"
+          echo "- Synaptics TCM2 module chain verified"
+          echo "- Recovery header 13.0.0 / 2025-11 verified"
+          echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
+          echo "=================================================="
+
+      # ==========================================
+      # FULL BUILD (dry_run == false)
+      # ==========================================
+      - name: Full Build - Native Disk Cleanup & Swap
+        if: ${{ !inputs.dry_run }}
+        run: |
+          bash scripts/ci/disk-cleanup.sh
+
+      - name: Full Build - Setup Host Environment
+        if: ${{ !inputs.dry_run }}
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
+          sudo apt-get install -y repo ccache git python3 libncurses5
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Full Build - Setup ccache
+        if: ${{ !inputs.dry_run }}
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          create-symlink: true
+          update-package-index: false
+
+      - name: Full Build - Sync TWRP Manifest
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Initializing repo manifest ==="
+          repo init -u "$REF_MANIFEST_A16" -b "$REF_MANIFEST_BRANCH" --depth=1
+          echo "=== Syncing source ==="
+          repo sync --current-branch --no-tags --no-clone-bundle --optimized-fetch --prune -j$(nproc --all)
+
+      - name: Full Build - Setup Device Tree & Overlay
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git clone "$REF_TREE_SM8550" device/oplus/sm8550
+          git -C device/oplus/sm8550 checkout "$REF_TREE_SM8550_SHA"
+          bash scripts/ci/apply-overlay.sh device/oplus/sm8550
+          bash scripts/ci/validate-device.sh device/oplus/sm8550
+
+      - name: Full Build - Prune Unused Trees
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "Pruning heavy unused trees..."
+          rm -rf cts test/suite_harness tools/tradefederation tools/loganalysis hardware/google/aemu system/secretkeeper packages/modules/AdServices
+          df -h
+
+      - name: Full Build - Compile Recovery Image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          source build/envsetup.sh
+          lunch twrp_sm8550-aosp_current-eng
+
+          JOBS="${{ inputs.build_jobs }}"
+          if [ "$JOBS" = "0" ] || [ -z "$JOBS" ]; then
+            JOBS=$(nproc --all)
+            if [ "$JOBS" -gt 3 ]; then JOBS=3; fi
+          fi
+          echo "Building recoveryimage with -j$JOBS..."
+          mka recoveryimage -j"$JOBS"
+
+      - name: Full Build - Verify Built Image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          bash scripts/ci/verify-image.sh out/target/product/sm8550/recovery.img
+
+      - name: Full Build - Upload Artifact
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: twrp-pgem10-recovery
+          path: out/target/product/sm8550/recovery.img
+          if-no-files-found: error
