@@ -1,0 +1,2 @@
+# Removable USB-OTG storage only (system_ext, vendor_dlkm, metadata, misc are handled by recovery.fstab)
+/usbstorage     vfat    /dev/block/sdg1                                 /dev/block/sdg      flags=fsflags=utf8;display="USB-OTG";storage;wipeingui;removable

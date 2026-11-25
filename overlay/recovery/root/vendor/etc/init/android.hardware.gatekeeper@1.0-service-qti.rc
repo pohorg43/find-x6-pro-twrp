@@ -4,6 +4,3 @@ service gatekeeper-1-0 /vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qt
     group system
     disabled
     seclabel u:r:recovery:s0
-
-on property:vendor.gatekeeper.is_security_level_spu=0
-    enable gatekeeper-1-0

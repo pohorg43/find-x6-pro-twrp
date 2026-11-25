@@ -11,6 +11,8 @@ service post-boot-script /system/bin/sh -c /vendor/bin/init.kernel.post_boot-kal
 on init
     setprop sys.usb.configfs 1
     setprop prepdecrypt.setpatch true
+    setprop vendor.gatekeeper.disable_spu true
+    setprop vendor.gatekeeper.is_security_level_spu 0
     start boot-hal-1-2
 
 on fs
@@ -18,14 +20,37 @@ on fs
     symlink /dev/block/platform/soc/${ro.boot.bootdevice} /dev/block/bootdevice
     wait /dev/block/bootdevice/by-name/misc 5
     exec u:r:recovery:s0 root root -- /system/bin/sh /system/bin/clear-bcb.sh
+    # Mount firmware, persist & symlink /vendor/firmware_mnt BEFORE TWRP starts & temporarily mounts /vendor
+    mkdir /firmware 0771 system system
+    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
+    rmdir /vendor/firmware_mnt
+    symlink /firmware /vendor/firmware_mnt
+    mkdir /mnt/vendor 0771 system system
+    mkdir /mnt/vendor/persist 0771 system system
+    mount ext4 /dev/block/bootdevice/by-name/persist /mnt/vendor/persist rw
+    mkdir /data/vendor 0771 system system
+    mkdir /data/vendor/tzstorage 0770 system system
+    mkdir /data/vendor/qwes 0755 system system
     write /proc/sys/kernel/firmware_config/force_sysfs_fallback 1
 
 on property:twrp.modules.loaded=true
-    # Mount firmware (modem_a / modem_b) for ADSP firmware
-    mkdir /firmware 0771 system system
-    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
     # Load ADSP firmware for PMIC GLINK & battery capacity
     wait /sys/kernel/boot_adsp/ssr 5
     write /sys/kernel/boot_adsp/ssr 1
     wait /sys/class/power_supply/battery 5
     start health-hal-2-1
+    start override-spl
+
+on property:vendor.twrp.spl_ready=1
+    start vendor.qseecomd
+
+on property:vendor.twrp.crypto_ready=1
+    start qseecom-service
+    start vendor.keymint-qti
+    enable gatekeeper-1-0
+    start gatekeeper-1-0
+    start vendor.ssgtzd
+    enable keystore2
+    start keystore2
+    setprop sys.boot_completed 1
+    setprop crypto.ready 1

@@ -1,4 +1,4 @@
-service override-spl /vendor/bin/override-spl.sh
+service override-spl /system/bin/override-spl.sh
     user root
     group root
     disabled

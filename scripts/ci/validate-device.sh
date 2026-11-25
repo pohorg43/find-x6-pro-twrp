@@ -23,9 +23,9 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step A) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C) ==="
 
-# 1. Core + Step A structure check
+# 1. Core + Step C structure check
 for required_file in \
     "BoardConfig.mk" \
     "device.mk" \
@@ -34,7 +34,20 @@ for required_file in \
     "libinit/libinit_oplus_sm8550.cpp" \
     "recovery/root/init.recovery.qcom.rc" \
     "recovery/root/system/bin/clear-bcb.sh" \
+    "recovery/root/system/bin/override-spl.sh" \
+    "recovery/root/system/etc/vintf/manifest.xml" \
+    "recovery/root/system/etc/twrp.flags" \
     "recovery/root/vendor/etc/ueventd.rc" \
+    "recovery/root/vendor/etc/ssg/ta_config.json" \
+    "recovery/root/vendor/etc/gpfspath_oem_config.xml" \
+    "recovery/root/vendor/etc/vintf/manifest.xml" \
+    "recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml" \
+    "recovery/root/vendor/etc/init/override-spl.rc" \
+    "recovery/root/vendor/etc/init/qseecomd.rc" \
+    "recovery/root/vendor/etc/init/ssgtzd.rc" \
+    "recovery/root/vendor/etc/init/vendor.qti.hardware.qseecom@1.0-service.rc" \
+    "recovery/root/vendor/etc/init/android.hardware.security.keymint-service-qti.rc" \
+    "recovery/root/vendor/etc/init/android.hardware.gatekeeper@1.0-service-qti.rc" \
     "recovery/root/vendor/bin/qseecomd" \
     "recovery/root/vendor/bin/ssgtzd" \
     "recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti" \
@@ -51,20 +64,26 @@ for required_file in \
     fi
 done
 [ -x "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" ] || { echo "ERROR: clear-bcb.sh is not executable!" >&2; exit 1; }
-echo "✓ Core + Step A structure (clear-bcb.sh +0755) validated"
+[ -x "$TARGET_DIR/recovery/root/system/bin/override-spl.sh" ] || { echo "ERROR: override-spl.sh is not executable!" >&2; exit 1; }
+echo "✓ Core + Step C structure (clear-bcb.sh, override-spl.sh +0755, VINTF, 6 .rc) validated"
 
-# 1b. Verify Step A isolation from keystore2/VINTF/twrp.flags conflicts
-for forbidden_file in \
-    "recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml" \
-    "recovery/root/vendor/etc/vintf/manifest.xml" \
-    "recovery/root/system/etc/vintf/manifest.xml" \
-    "recovery/root/system/etc/twrp.flags"; do
-    if [ -e "$TARGET_DIR/$forbidden_file" ]; then
-        echo "ERROR: $forbidden_file must be parked during Step A isolation!" >&2
-        exit 1
-    fi
+# 1b. VINTF XML & twrp.flags validation
+SYS_VINTF="$TARGET_DIR/recovery/root/system/etc/vintf/manifest.xml"
+VEN_VINTF="$TARGET_DIR/recovery/root/vendor/etc/vintf/manifest.xml"
+python3 -c "import xml.etree.ElementTree as ET; ET.parse('$SYS_VINTF'); ET.parse('$VEN_VINTF'); ET.parse('$TARGET_DIR/recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml')"
+grep -q "android.hidl.manager" "$SYS_VINTF" && grep -q "@1.2::IServiceManager/default" "$SYS_VINTF" || {
+    echo "ERROR: android.hidl.manager@1.2::IServiceManager/default missing in system VINTF manifest!" >&2; exit 1;
+}
+for hal in android.hardware.boot android.hardware.health android.hardware.gatekeeper vendor.qti.hardware.qseecom; do
+    grep -q "$hal" "$VEN_VINTF" || { echo "ERROR: $hal missing in vendor/etc/vintf/manifest.xml" >&2; exit 1; }
 done
-echo "✓ Step A VINTF / twrp.flags isolation verified"
+TWRP_FLAGS="$TARGET_DIR/recovery/root/system/etc/twrp.flags"
+grep -q "/usbstorage" "$TWRP_FLAGS" || { echo "ERROR: /usbstorage missing in twrp.flags" >&2; exit 1; }
+if grep -qE "^\s*/(system_ext|system_dlkm|vendor_dlkm|metadata|firmware|persist|boot|recovery)\b" "$TWRP_FLAGS"; then
+    echo "ERROR: twrp.flags must not duplicate partitions already defined in recovery.fstab!" >&2
+    exit 1
+fi
+echo "✓ VINTF manifests (hwservicemanager + 4 device HIDL HALs + KeyMint AIDL) and minimal twrp.flags validated"
 
 # 2. Partition size check
 BC="$TARGET_DIR/BoardConfig.mk"
@@ -75,7 +94,7 @@ if [[ "$PART_SIZE_LINE" != *"104857600"* && "$PART_SIZE_LINE" != *"0x6400000"* ]
 fi
 echo "✓ Recovery partition size validated: 104857600 bytes"
 
-# 3. Stage 2 BoardConfig / device.mk / init.recovery.qcom.rc invariants
+# 3. BoardConfig / device.mk / init.recovery.qcom.rc / ueventd.rc invariants
 if grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*true" "$BC"; then
     echo "ERROR: TW_INCLUDE_OMAPI must be disabled (false) for PGEM10" >&2
     exit 1
@@ -86,14 +105,19 @@ grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
 
 INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
-grep -q "wait /dev/block/bootdevice/by-name/misc 5" "$INIT_QCOM" || { echo "ERROR: wait /dev/block/bootdevice/by-name/misc 5 missing in init.recovery.qcom.rc" >&2; exit 1; }
+grep -q "wait /dev/block/bootdevice/by-name/misc 5" "$INIT_QCOM" || { echo "ERROR: wait misc 5 missing in init.recovery.qcom.rc" >&2; exit 1; }
 grep -q "exec u:r:recovery:s0 root root -- /system/bin/sh /system/bin/clear-bcb.sh" "$INIT_QCOM" || { echo "ERROR: clear-bcb.sh exec missing in init.recovery.qcom.rc" >&2; exit 1; }
-if grep -qE "keymint-qti|gatekeeper-1-0|qseecomd|override-spl|ssgtzd" "$INIT_QCOM"; then
-    echo "ERROR: Crypto daemons must not be launched in Step A init.recovery.qcom.rc!" >&2
+if grep -qE "^\s*umount\s+/vendor" "$INIT_QCOM"; then
+    echo "ERROR: init.recovery.qcom.rc must NOT run umount /vendor!" >&2
     exit 1
 fi
+grep -q "setprop vendor.gatekeeper.disable_spu true" "$INIT_QCOM" || { echo "ERROR: vendor.gatekeeper.disable_spu missing" >&2; exit 1; }
+grep -q "setprop vendor.gatekeeper.is_security_level_spu 0" "$INIT_QCOM" || { echo "ERROR: vendor.gatekeeper.is_security_level_spu missing" >&2; exit 1; }
+grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 trigger missing" >&2; exit 1; }
+grep -q "on property:vendor.twrp.crypto_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.crypto_ready=1 trigger missing" >&2; exit 1; }
+grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
 grep -q "/dev/smcinvoke" "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc" || { echo "ERROR: /dev/smcinvoke rule missing in vendor/etc/ueventd.rc" >&2; exit 1; }
-echo "✓ Step A BoardConfig.mk, device.mk, init.recovery.qcom.rc, and ueventd.rc validated"
+echo "✓ Step C BoardConfig.mk, device.mk, init.recovery.qcom.rc, and ueventd.rc validated"
 
 # 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
@@ -104,7 +128,7 @@ for mod in \
     qseecom_proxy.ko smcinvoke_dlkm.ko \
     synaptics_tcm2.ko panel_event_notifier.ko olc.ko oplus_bsp_tp_custom.ko oplus_bsp_tp_comon.ko; do
     if ! grep -qw "$mod" <<<"$MOD_LINE"; then
-        echo "ERROR: Required Step A module $mod missing from TW_LOAD_VENDOR_MODULES" >&2
+        echo "ERROR: Required module $mod missing from TW_LOAD_VENDOR_MODULES" >&2
         exit 1
     fi
 done
@@ -157,7 +181,20 @@ print(f"✓ Overlay size hygiene validated ({total / (1024*1024):.2f} MiB <= 35 
 PYEOF
 fi
 
-# 7. ELF DT_NEEDED closure check (pre-build overlay or post-build full ramdisk)
+# 7. Post-build keystore2.rc check (must not contain active critical window=0 or on late-init)
+if [ -n "$RAMDISK_ROOT" ]; then
+    KS_RC="$RAMDISK_ROOT/system/etc/init/keystore2.rc"
+    [ -f "$KS_RC" ] || { echo "ERROR: $KS_RC missing in ramdisk root!" >&2; exit 1; }
+    if grep -qE "^\s*critical\b" "$KS_RC" || grep -qE "^\s*on\s+late-init" "$KS_RC"; then
+        echo "ERROR: $KS_RC still contains active critical or on late-init!" >&2
+        cat "$KS_RC" >&2
+        exit 1
+    fi
+    grep -qE "^\s*disabled\b" "$KS_RC" || { echo "ERROR: $KS_RC missing disabled flag!" >&2; exit 1; }
+    echo "✓ Post-build keystore2.rc verified (disabled, no critical window=0)"
+fi
+
+# 8. ELF DT_NEEDED closure check
 ELF_ROOT="${RAMDISK_ROOT:-$TARGET_DIR/recovery/root}"
 STRICT_MODE=$([ -n "$RAMDISK_ROOT" ] && echo "1" || echo "0")
 python3 - "$ELF_ROOT" "$STRICT_MODE" <<'PYEOF'
@@ -279,14 +316,14 @@ if [ -n "$RAMDISK_ROOT" ]; then
     exit 0
 fi
 
-# 8. Remote manifest accessibility check
+# 9. Remote manifest accessibility check
 MANIFEST_URL="${REF_MANIFEST_A16:-https://github.com/TWRP-Test/platform_manifest_twrp_aosp}"
 MANIFEST_BRANCH="${REF_MANIFEST_BRANCH:-twrp-16.0}"
 echo "Checking remote manifest: $MANIFEST_URL ($MANIFEST_BRANCH)..."
 git ls-remote --exit-code "$MANIFEST_URL" "refs/heads/$MANIFEST_BRANCH" >/dev/null
 echo "✓ Manifest branch $MANIFEST_BRANCH exists and is reachable!"
 
-# 9. Validate local prune manifest
+# 10. Validate local prune manifest
 PRUNE_MANIFEST="$REPO_ROOT/manifests/remove-unneeded.xml"
 if [ -f "$PRUNE_MANIFEST" ]; then
     python3 -c "import xml.etree.ElementTree as ET; ET.parse('$PRUNE_MANIFEST')"

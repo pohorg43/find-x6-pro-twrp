@@ -1,9 +1,9 @@
-#!/sbin/sh
+#!/system/bin/sh
 
 SCRIPTNAME="override-spl.sh"
 
 log() {
-	echo "I:$SCRIPTNAME: $1" >> /dev/kmsg 2>/dev/null || true
+	echo "I:$SCRIPTNAME: $1" > /dev/kmsg 2>/dev/null || true
 	echo "I:$SCRIPTNAME: $1" >> /tmp/recovery.log 2>/dev/null || true
 }
 
@@ -15,10 +15,26 @@ fi
 
 SLOT=$(getprop ro.boot.slot_suffix)
 if [ -z "$SLOT" ]; then
-	log "No slot suffix detected, exit script."
+	log "ERROR: No slot suffix detected, skipping crypto stack to stay in YARP."
 	exit 1
 fi
 log "Slot detected: $SLOT"
+
+# Wait up to 15s (30 x 0.5s) for TWRP UnMount_Main_Partitions() to unmount logical /vendor
+v=0
+while [ "$v" -lt 30 ]; do
+	if ! grep -q " /vendor " /proc/mounts 2>/dev/null; then
+		break
+	fi
+	v=$((v + 1))
+	sleep 0.5
+done
+
+if grep -q " /vendor " /proc/mounts 2>/dev/null; then
+	log "ERROR: /vendor still mounted after 15s, skipping crypto stack to avoid loop."
+	exit 1
+fi
+log "/vendor unmounted cleanly; ramdisk overlay active."
 
 read_prop_from_block() {
 	MNT="$1"
@@ -68,7 +84,7 @@ if VAL=$(read_prop_from_block "/tmp/spl_manifest" "/dev/block/mapper/my_manifest
 	VEN_SPL="$VAL"
 fi
 
-# Fallback / authoritative checks against system and vendor dynamic partitions
+# Fallback against system and vendor dynamic partitions
 if [ -z "$REL" ]; then
 	REL=$(read_prop_from_block "/tmp/spl_system" "/dev/block/mapper/system${SLOT}" "ro.build.version.release" || true)
 fi
@@ -96,17 +112,20 @@ if [ -n "$VEN_SPL" ]; then
 	log "Override ro.vendor.build.security_patch to $VEN_SPL"
 fi
 
-# Wait for qseecomd listeners with strict 15s timeout before triggering KeyMint/Gatekeeper
+# Start qseecomd now that SPL is overridden and /vendor is ramdisk
+setprop vendor.twrp.spl_ready 1
+log "vendor.twrp.spl_ready=1, waiting up to 15s for vendor.sys.listeners.registered=true"
+
 i=0
 while [ "$i" -lt 30 ]; do
 	if [ "$(getprop vendor.sys.listeners.registered)" = "true" ]; then
-		break
+		setprop vendor.twrp.crypto_ready 1
+		log "vendor.twrp.crypto_ready=1 (listeners registered)"
+		exit 0
 	fi
 	i=$((i + 1))
 	sleep 0.5
 done
 
-setprop vendor.twrp.spl_ready 1
-log "vendor.twrp.spl_ready=1 (listeners=$(getprop vendor.sys.listeners.registered))"
-
-exit 0
+log "ERROR: vendor.sys.listeners.registered!=true after 15s ($(getprop vendor.sys.listeners.registered)); NOT starting keymint/gatekeeper to keep YARP alive."
+exit 1

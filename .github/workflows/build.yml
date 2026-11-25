@@ -68,7 +68,7 @@ jobs:
           echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
           echo "- Patches applied cleanly: 0 *.rej files"
           echo "- Battery + SMCInvoke + Synaptics TCM2 minimal module chain (45 .ko) verified"
-          echo "- Step A isolation (clear-bcb.sh in /system/bin, minimal ueventd.rc, crypto daemons/VINTF disabled) & ELF closure verified"
+          echo "- Step C VINTF (hwservicemanager + 4 device HIDL HALs + KeyMint V2 AIDL), clear-bcb + override-spl in /system/bin, and ELF closure verified"
           echo "- Clean header config: PLATFORM_VERSION=13 / PLATFORM_SECURITY_PATCH=2025-11-01"
           echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
           echo "=================================================="
@@ -215,6 +215,23 @@ jobs:
           PYEOF
           diff -u /tmp/bootstrap.go.orig build/blueprint/bootstrap/bootstrap.go || [ $? -eq 1 ]
           rm -f /tmp/bootstrap.go.orig
+
+          echo "=== Patching bootable/recovery/etc/init/keystore2.rc to disable early start and critical window=0 ==="
+          cp bootable/recovery/etc/init/keystore2.rc /tmp/keystore2.rc.orig
+          python3 - <<'PYEOF'
+          from pathlib import Path
+          p = Path("bootable/recovery/etc/init/keystore2.rc")
+          src = p.read_text()
+          early_target = "on late-init\n    start keystore2"
+          early_repl = "# Disabled early late-init start; launched after KeyMint in init.recovery.qcom.rc"
+          crit_target = "    critical window=0"
+          crit_repl = "    disabled\n    # critical window=0 disabled for TWRP"
+          assert src.count(early_target) == 1, f"Unexpected early_target count: {src.count(early_target)}"
+          assert src.count(crit_target) == 1, f"Unexpected crit_target count: {src.count(crit_target)}"
+          p.write_text(src.replace(early_target, early_repl, 1).replace(crit_target, crit_repl, 1))
+          PYEOF
+          diff -u /tmp/keystore2.rc.orig bootable/recovery/etc/init/keystore2.rc || [ $? -eq 1 ]
+          rm -f /tmp/keystore2.rc.orig
 
           lunch twrp_sm8550-aosp_current-eng
 
