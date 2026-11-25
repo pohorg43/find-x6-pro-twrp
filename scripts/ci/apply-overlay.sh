@@ -19,7 +19,7 @@ if [ -d "$REPO_ROOT/overlay" ]; then
         dest_file="$TARGET_DIR/$rel_path"
         echo "Applying overlay: $rel_path -> $dest_file"
         mkdir -p "$(dirname "$dest_file")"
-        cp -f "$src_file" "$dest_file"
+        cp -pf "$src_file" "$dest_file"
     done
 fi
 

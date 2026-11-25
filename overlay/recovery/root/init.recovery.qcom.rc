@@ -1,0 +1,53 @@
+on early-fs
+    write /proc/sys/walt/sched_lib_name "recovery,Updater,updater,update_engine_sideload"
+    write /proc/sys/walt/sched_lib_mask_force 255
+
+service post-boot-script /system/bin/sh -c /vendor/bin/init.kernel.post_boot-kalama_default_5_15.sh
+    user root
+    group root
+    oneshot
+    seclabel u:r:recovery:s0
+
+on init
+    setprop sys.usb.configfs 1
+    setprop prepdecrypt.setpatch true
+    setprop vendor.gatekeeper.disable_spu true
+    setprop vendor.gatekeeper.is_security_level_spu 0
+    start boot-hal-1-2
+
+on fs
+    wait /dev/block/platform/soc/${ro.boot.bootdevice}
+    symlink /dev/block/platform/soc/${ro.boot.bootdevice} /dev/block/bootdevice
+    write /proc/sys/kernel/firmware_config/force_sysfs_fallback 1
+
+on property:twrp.modules.loaded=true
+    # Mount firmware (modem_a / modem_b) for ADSP and TZ/QSEE TAs
+    mkdir /firmware 0771 system system
+    mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
+    # Expose ramdisk /vendor/ and firmware_mnt symlink
+    umount /vendor
+    symlink /firmware /vendor/firmware_mnt
+    # Mount persist and prepare GPFS paths before starting QSEE/KeyMint/Gatekeeper
+    mkdir /mnt/vendor 0771 system system
+    mkdir /mnt/vendor/persist 0771 system system
+    mount ext4 /dev/block/bootdevice/by-name/persist /mnt/vendor/persist rw
+    mkdir /data/vendor 0771 system system
+    mkdir /data/vendor/tzstorage 0770 system system
+    mkdir /data/vendor/qwes 0755 system system
+    # Boot ADSP firmware for PMIC GLINK & battery capacity
+    wait /sys/kernel/boot_adsp/ssr 5
+    write /sys/kernel/boot_adsp/ssr 1
+    wait /sys/class/power_supply/battery 5
+    start health-hal-2-1
+    # Start Stage 2 QSEECom / KeyMint / Gatekeeper services
+    start vendor.qseecomd
+    start qseecom-service
+    start vendor.keymint-qti
+    enable gatekeeper-1-0
+    start gatekeeper-1-0
+    # Override SPL & Android release props from stock partitions and set crypto.ready=1
+    start override-spl
+
+on property:vendor.sys.listeners.registered=true
+    setprop sys.boot_completed 1
+    start vendor.ssgtzd
