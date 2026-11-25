@@ -42,6 +42,8 @@ for required_file in \
     "recovery/root/vendor/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so" \
     "recovery/root/vendor/lib64/libqtikeymint.so" \
     "recovery/root/system/lib64/android.hardware.security.keymint-V2-ndk.so" \
+    "recovery/root/system/lib64/libcurl.so" \
+    "recovery/root/system/lib64/libfmq.so" \
     "recovery/root/vendor/etc/ueventd.rc" \
     "recovery/root/vendor/etc/ssg/ta_config.json" \
     "recovery/root/vendor/etc/gpfspath_oem_config.xml" \
@@ -73,12 +75,11 @@ fi
 grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*false" "$BC" || { echo "ERROR: TW_INCLUDE_OMAPI := false missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "^\s*BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_DUP_RULES := true missing in BoardConfig.mk" >&2; exit 1; }
-grep -q "libcurl.so" "$BC" && grep -q "libfmq.so" "$BC" || { echo "ERROR: libcurl.so / libfmq.so missing from RECOVERY_LIBRARY_SOURCE_FILES" >&2; exit 1; }
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
 INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
 grep -q "rmdir /vendor/firmware_mnt" "$INIT_QCOM" || { echo "ERROR: rmdir /vendor/firmware_mnt missing in init.recovery.qcom.rc" >&2; exit 1; }
 grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 gate missing in init.recovery.qcom.rc" >&2; exit 1; }
-echo "✓ Stage 2 BoardConfig.mk (OMAPI disabled, ELF prebuilt copy broken flag, libcurl/libfmq), device.mk, and init ordering validated"
+echo "✓ Stage 2 BoardConfig.mk (OMAPI disabled, ELF prebuilt copy broken flag), device.mk, and init ordering validated"
 
 # 4. Module list completeness & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
@@ -156,7 +157,7 @@ def parse_needed(path):
         if sh[1] == 6:  # SHT_DYNAMIC
             str_sh = sections[sh[6]]
             strtab = data[str_sh[4]:str_sh[4] + str_sh[5]]
-            for p in range(sh[3], sh[3] + sh[4], 16):
+            for p in range(sh[4], sh[4] + sh[5], 16):
                 d_tag, d_val = struct.unpack_from("<qQ", data, p)
                 if d_tag == 0:
                     break

@@ -1,5 +1,5 @@
 diff --git a/BoardConfig.mk b/BoardConfig.mk
-index 01a32ce..560be57 100644
+index 01a32ce..6364bde 100644
 --- a/BoardConfig.mk
 +++ b/BoardConfig.mk
 @@ -164,7 +164,7 @@ BOARD_AVB_VBMETA_SYSTEM_ROLLBACK_INDEX_LOCATION := 2
@@ -11,21 +11,7 @@ index 01a32ce..560be57 100644
  
  # Security patches
  PLATFORM_VERSION                := 13
-@@ -221,7 +221,13 @@ TW_OVERRIDE_SYSTEM_PROPS := \
- TW_OVERRIDE_PROPS_ADDITIONAL_PARTITIONS := vendor
- 
- # Recovery libraries
-+TARGET_RECOVERY_DEVICE_MODULES += \
-+    libcurl \
-+    libfmq
-+
- RECOVERY_LIBRARY_SOURCE_FILES += \
-+    $(TARGET_OUT_SHARED_LIBRARIES)/libcurl.so \
-+    $(TARGET_OUT_SHARED_LIBRARIES)/libfmq.so \
-     $(TARGET_OUT_SHARED_LIBRARIES)/android.hidl.allocator@1.0.so \
-     $(TARGET_OUT_SHARED_LIBRARIES)/android.hidl.memory@1.0.so \
-     $(TARGET_OUT_SHARED_LIBRARIES)/android.hidl.memory.token@1.0.so \
-@@ -234,7 +240,7 @@ RECOVERY_LIBRARY_SOURCE_FILES += \
+@@ -234,7 +234,7 @@ RECOVERY_LIBRARY_SOURCE_FILES += \
      $(TARGET_OUT_SYSTEM_EXT_SHARED_LIBRARIES)/vendor.display.config@2.0.so
  
  # Vendor modules to load in recovery
