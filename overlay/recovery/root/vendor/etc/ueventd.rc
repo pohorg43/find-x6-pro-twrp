@@ -1,8 +1,32 @@
-# Minimal QSEE / SMCInvoke / remoteproc permissions for TWRP Stage 2
+subsystem dma_heap
+    devname uevent_devpath
+    dirname /dev/dma_heap
+
+/dev/ion                  0664   system     system
+/dev/dma_heap/system      0444   system     system
+/dev/dma_heap/qcom,*      0444   system     system
+
+# Permissions for UFS RPMB and GPT LUN4 BSG device nodes (direct /dev/, no subsystem bsg)
+/dev/0:0:0:49476          0600   system     system
+/dev/0:0:0:4              0600   system     root
+
+# TEE / QSEECOM / SPSS / KeyMint / Gatekeeper devices
 /dev/qseecom              0660   system     drmrpc
 /dev/qce                  0660   system     drmrpc
 /dev/smcinvoke            0660   system     drmrpc
 /dev/qsee_ipc_irq_spss    0660   system     drmrpc
 /dev/pft                  0660   system     drmrpc
 /dev/spcom                0660   system     system
+/dev/spss_utils           0660   system     system
+/dev/sp_kernel            0660   system     system
+/dev/sp_nvm               0660   system     system
+/dev/sp_ssr               0660   system     system
+/dev/sp_keymaster         0660   system     system
+/dev/sp_keymaster_ssr     0660   system     system
+/dev/sec_nvm_*            0660   system     system
+/dev/cryptoapp            0660   system     system
+/dev/spdaemon_ssr         0660   system     system
+/dev/spu_hal_ssr          0660   system     system
+/dev/adsprpc-smd          0664   system     system
+/dev/adsprpc-smd-secure   0644   system     system
 /dev/remoteproc*          0640   system     system

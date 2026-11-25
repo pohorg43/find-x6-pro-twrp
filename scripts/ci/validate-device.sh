@@ -23,7 +23,7 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C2) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C3) ==="
 
 # 1. Core + Step C structure check
 for required_file in \
@@ -54,6 +54,20 @@ for required_file in \
     "recovery/root/vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qti" \
     "recovery/root/vendor/bin/hw/vendor.qti.hardware.qseecom@1.0-service" \
     "recovery/root/vendor/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so" \
+    "recovery/root/vendor/lib64/hw/vendor.qti.hardware.qseecom@1.0-impl.so" \
+    "recovery/root/vendor/lib64/librpmb.so" \
+    "recovery/root/vendor/lib64/libgpt.so" \
+    "recovery/root/vendor/lib64/libssd.so" \
+    "recovery/root/vendor/lib64/libspl.so" \
+    "recovery/root/vendor/lib64/libdrmtime.so" \
+    "recovery/root/vendor/lib64/libops.so" \
+    "recovery/root/vendor/lib64/libqisl.so" \
+    "recovery/root/vendor/lib64/libGPreqcancel.so" \
+    "recovery/root/vendor/lib64/libGPreqcancel_svc.so" \
+    "recovery/root/vendor/lib64/libtime_genoff.so" \
+    "recovery/root/vendor/lib64/libdrm.so" \
+    "recovery/root/vendor/lib64/libdisplayconfig.qti.so" \
+    "recovery/root/vendor/lib64/vendor.display.config@2.0.so" \
     "recovery/root/vendor/lib64/libqtikeymint.so" \
     "recovery/root/system/lib64/android.hardware.security.keymint-V2-ndk.so" \
     "recovery/root/system/lib64/libcurl.so" \
@@ -131,11 +145,48 @@ grep -q "setprop vendor.gatekeeper.is_security_level_spu 0" "$INIT_QCOM" || { ec
 grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 trigger missing" >&2; exit 1; }
 grep -q "on property:vendor.twrp.crypto_hal_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.crypto_hal_ready=1 trigger missing" >&2; exit 1; }
 grep -q "on property:vendor.twrp.keystore_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.keystore_ready=1 trigger missing" >&2; exit 1; }
+if grep -q "post-boot-script" "$INIT_QCOM"; then
+    echo "ERROR: init.recovery.qcom.rc must NOT define or start post-boot-script!" >&2
+    exit 1
+fi
+for data_dir in "/data/vendor/tzstorage" "/data/vendor/qwes" "/data/vendor/time" "/data/vendor/qtee" "/data/vendor/tui"; do
+    grep -q "mkdir $data_dir " "$INIT_QCOM" || { echo "ERROR: mkdir $data_dir missing in init.recovery.qcom.rc" >&2; exit 1; }
+done
+python3 - "$INIT_QCOM" <<'PYEOF'
+import sys
+src = open(sys.argv[1]).read()
+idx_spl = src.find("start override-spl")
+idx_bat = src.find("wait /sys/class/power_supply/battery")
+if idx_spl == -1 or idx_bat == -1 or idx_spl > idx_bat:
+    print("ERROR: start override-spl must come BEFORE wait /sys/class/power_supply/battery in init.recovery.qcom.rc", file=sys.stderr)
+    sys.exit(1)
+PYEOF
 grep -q "bs=128" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || { echo "ERROR: clear-bcb.sh must zero 128 bytes!" >&2; exit 1; }
-grep -q "twrp.storage.ready" "$TARGET_DIR/recovery/root/system/bin/override-spl.sh" || { echo "ERROR: override-spl.sh must wait for twrp.storage.ready!" >&2; exit 1; }
+OVERRIDE_SH="$TARGET_DIR/recovery/root/system/bin/override-spl.sh"
+grep -q "twrp.storage.ready" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must wait for twrp.storage.ready!" >&2; exit 1; }
+grep -q "\-t erofs" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must mount with explicit -t erofs!" >&2; exit 1; }
+grep -q "ro.build.version.release_or_codename" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must override ro.build.version.release_or_codename!" >&2; exit 1; }
+grep -qE "^\s*sleep 2(\s|$)" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must keep sleep 2 before starting keystore2!" >&2; exit 1; }
 grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
-grep -q "/dev/smcinvoke" "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc" || { echo "ERROR: /dev/smcinvoke rule missing in vendor/etc/ueventd.rc" >&2; exit 1; }
-echo "✓ Step C2 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
+UEVENTD_VEN="$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
+if grep -qE "^\s*subsystem\s+bsg\b" "$UEVENTD_VEN"; then
+    echo "ERROR: vendor/etc/ueventd.rc must NOT declare subsystem bsg (nodes must stay directly in /dev/)!" >&2
+    exit 1
+fi
+for rule in \
+    "/dev/smcinvoke" \
+    "subsystem dma_heap" \
+    "/dev/dma_heap/system" \
+    "/dev/dma_heap/qcom,\*" \
+    "/dev/ion[[:space:]]" \
+    "/dev/0:0:0:49476[[:space:]]" \
+    "/dev/0:0:0:4[[:space:]]" \
+    "/dev/spss_utils[[:space:]]" \
+    "/dev/sp_keymaster[[:space:]]" \
+    "/dev/sec_nvm_\*[[:space:]]"; do
+    grep -qE "$rule" "$UEVENTD_VEN" || { echo "ERROR: Missing ueventd rule '$rule' in vendor/etc/ueventd.rc" >&2; exit 1; }
+done
+echo "✓ Step C3 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
 # 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
@@ -251,12 +302,28 @@ roots = [
     os.path.join(root, "vendor/bin/qseecomd"),
     os.path.join(root, "vendor/bin/ssgtzd"),
     os.path.join(root, "vendor/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so"),
+    os.path.join(root, "vendor/lib64/hw/vendor.qti.hardware.qseecom@1.0-impl.so"),
     os.path.join(root, "vendor/lib64/libqtikeymint.so"),
+    os.path.join(root, "vendor/lib64/librpmb.so"),
+    os.path.join(root, "vendor/lib64/libgpt.so"),
+    os.path.join(root, "vendor/lib64/libssd.so"),
+    os.path.join(root, "vendor/lib64/libspl.so"),
+    os.path.join(root, "vendor/lib64/libdrmtime.so"),
+    os.path.join(root, "vendor/lib64/libops.so"),
+    os.path.join(root, "vendor/lib64/libqisl.so"),
+    os.path.join(root, "vendor/lib64/libGPreqcancel.so"),
+    os.path.join(root, "vendor/lib64/libGPreqcancel_svc.so"),
+    os.path.join(root, "vendor/lib64/libtime_genoff.so"),
+    os.path.join(root, "vendor/lib64/libdrm.so"),
+    os.path.join(root, "vendor/lib64/libdisplayconfig.qti.so"),
+    os.path.join(root, "vendor/lib64/vendor.display.config@2.0.so"),
 ]
 
 aosp_system_libs = {
     "android.hardware.security.secureclock-V1-ndk.so",
     "android.hardware.security.sharedsecret-V1-ndk.so",
+    "android.hidl.allocator@1.0.so",
+    "android.hidl.memory@1.0.so",
     "android.system.suspend-V1-ndk.so",
     "libandroidicu.so",
     "libbase.so",
@@ -273,6 +340,7 @@ aosp_system_libs = {
     "libhardware.so",
     "libhardware_legacy.so",
     "libhidlbase.so",
+    "libhidlmemory.so",
     "libicui18n.so",
     "libicuuc.so",
     "libion.so",

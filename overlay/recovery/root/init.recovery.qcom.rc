@@ -2,12 +2,6 @@ on early-fs
     write /proc/sys/walt/sched_lib_name "recovery,Updater,updater,update_engine_sideload"
     write /proc/sys/walt/sched_lib_mask_force 255
 
-service post-boot-script /system/bin/sh -c /vendor/bin/init.kernel.post_boot-kalama_default_5_15.sh
-    user root
-    group root
-    oneshot
-    seclabel u:r:recovery:s0
-
 on init
     setprop sys.usb.configfs 1
     setprop prepdecrypt.setpatch true
@@ -29,15 +23,18 @@ on fs
     mkdir /data/vendor 0771 system system
     mkdir /data/vendor/tzstorage 0770 system system
     mkdir /data/vendor/qwes 0755 system system
+    mkdir /data/vendor/time 0700 system system
+    mkdir /data/vendor/qtee 0770 system system
+    mkdir /data/vendor/tui 0700 system drmrpc
     write /proc/sys/kernel/firmware_config/force_sysfs_fallback 1
 
 on property:twrp.modules.loaded=true
     # Load ADSP firmware for PMIC GLINK & battery capacity
     wait /sys/kernel/boot_adsp/ssr 5
     write /sys/kernel/boot_adsp/ssr 1
+    start override-spl
     wait /sys/class/power_supply/battery 5
     start health-hal-2-1
-    start override-spl
 
 on property:vendor.twrp.spl_ready=1
     start vendor.qseecomd

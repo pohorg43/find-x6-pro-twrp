@@ -48,7 +48,9 @@ read_prop_from_block() {
 	fi
 
 	mkdir -p "$MNT"
-	if ! mount -o ro "$BLK" "$MNT" 2>/dev/null; then
+	if ! mount -t erofs -o ro "$BLK" "$MNT" 2>/dev/null && \
+	   ! mount -t ext4 -o ro "$BLK" "$MNT" 2>/dev/null && \
+	   ! mount -o ro "$BLK" "$MNT" 2>/dev/null; then
 		rmdir "$MNT" 2>/dev/null || true
 		return 1
 	fi
@@ -100,7 +102,7 @@ if [ -n "$REL" ]; then
 	resetprop ro.build.version.release "$REL"
 	resetprop ro.build.version.release_or_codename "$REL"
 	resetprop ro.system.build.version.release "$REL"
-	log "Override release to $REL"
+	log "Override release to $REL (release_or_codename=$REL)"
 fi
 
 if [ -n "$SYS_SPL" ]; then
