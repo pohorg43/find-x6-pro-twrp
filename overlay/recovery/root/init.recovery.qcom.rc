@@ -26,8 +26,9 @@ on property:twrp.modules.loaded=true
     mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
     # Expose ramdisk /vendor/ and firmware_mnt symlink
     umount /vendor
+    rmdir /vendor/firmware_mnt
     symlink /firmware /vendor/firmware_mnt
-    # Mount persist and prepare GPFS paths before starting QSEE/KeyMint/Gatekeeper
+    # Mount persist and prepare GPFS paths before starting QSEECom daemon
     mkdir /mnt/vendor 0771 system system
     mkdir /mnt/vendor/persist 0771 system system
     mount ext4 /dev/block/bootdevice/by-name/persist /mnt/vendor/persist rw
@@ -39,14 +40,16 @@ on property:twrp.modules.loaded=true
     write /sys/kernel/boot_adsp/ssr 1
     wait /sys/class/power_supply/battery 5
     start health-hal-2-1
-    # Start Stage 2 QSEECom / KeyMint / Gatekeeper services
+    # Start QSEECom daemon first, then override SPL/release BEFORE KeyMint/Gatekeeper
     start vendor.qseecomd
+    start override-spl
+
+on property:vendor.twrp.spl_ready=1
     start qseecom-service
     start vendor.keymint-qti
     enable gatekeeper-1-0
     start gatekeeper-1-0
-    # Override SPL & Android release props from stock partitions and set crypto.ready=1
-    start override-spl
+    setprop crypto.ready 1
 
 on property:vendor.sys.listeners.registered=true
     setprop sys.boot_completed 1

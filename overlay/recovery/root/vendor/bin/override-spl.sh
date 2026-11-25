@@ -96,17 +96,17 @@ if [ -n "$VEN_SPL" ]; then
 	log "Override ro.vendor.build.security_patch to $VEN_SPL"
 fi
 
-# Wait briefly for qseecomd listeners before signalling crypto.ready
+# Wait for qseecomd listeners with strict 15s timeout before triggering KeyMint/Gatekeeper
 i=0
-while [ "$i" -lt 25 ]; do
+while [ "$i" -lt 30 ]; do
 	if [ "$(getprop vendor.sys.listeners.registered)" = "true" ]; then
 		break
 	fi
 	i=$((i + 1))
-	sleep 0.2
+	sleep 0.5
 done
 
-setprop crypto.ready 1
-log "crypto.ready=1 (listeners=$(getprop vendor.sys.listeners.registered))"
+setprop vendor.twrp.spl_ready 1
+log "vendor.twrp.spl_ready=1 (listeners=$(getprop vendor.sys.listeners.registered))"
 
 exit 0

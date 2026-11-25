@@ -71,9 +71,14 @@ if grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*true" "$BC"; then
     exit 1
 fi
 grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*false" "$BC" || { echo "ERROR: TW_INCLUDE_OMAPI := false missing in BoardConfig.mk" >&2; exit 1; }
+grep -qE "^\s*BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true missing in BoardConfig.mk" >&2; exit 1; }
+grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_DUP_RULES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -q "libcurl.so" "$BC" && grep -q "libfmq.so" "$BC" || { echo "ERROR: libcurl.so / libfmq.so missing from RECOVERY_LIBRARY_SOURCE_FILES" >&2; exit 1; }
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
-echo "✓ Stage 2 BoardConfig.mk (OMAPI disabled, libcurl/libfmq) & device.mk subtree copy validated"
+INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
+grep -q "rmdir /vendor/firmware_mnt" "$INIT_QCOM" || { echo "ERROR: rmdir /vendor/firmware_mnt missing in init.recovery.qcom.rc" >&2; exit 1; }
+grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 gate missing in init.recovery.qcom.rc" >&2; exit 1; }
+echo "✓ Stage 2 BoardConfig.mk (OMAPI disabled, ELF prebuilt copy broken flag, libcurl/libfmq), device.mk, and init ordering validated"
 
 # 4. Module list completeness & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
