@@ -23,7 +23,7 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C2) ==="
 
 # 1. Core + Step C structure check
 for required_file in \
@@ -74,7 +74,10 @@ python3 -c "import xml.etree.ElementTree as ET; ET.parse('$SYS_VINTF'); ET.parse
 grep -q "android.hidl.manager" "$SYS_VINTF" && grep -q "@1.2::IServiceManager/default" "$SYS_VINTF" || {
     echo "ERROR: android.hidl.manager@1.2::IServiceManager/default missing in system VINTF manifest!" >&2; exit 1;
 }
-for hal in android.hardware.boot android.hardware.health android.hardware.gatekeeper vendor.qti.hardware.qseecom; do
+if grep -q "android.hardware.boot" "$VEN_VINTF"; then
+    echo "ERROR: android.hardware.boot must NOT be in vendor/etc/vintf/manifest.xml (blocks recovery BootControlClient::WaitForService)!" >&2; exit 1;
+fi
+for hal in android.hardware.health android.hardware.gatekeeper vendor.qti.hardware.qseecom; do
     grep -q "$hal" "$VEN_VINTF" || { echo "ERROR: $hal missing in vendor/etc/vintf/manifest.xml" >&2; exit 1; }
 done
 TWRP_FLAGS="$TARGET_DIR/recovery/root/system/etc/twrp.flags"
@@ -83,7 +86,7 @@ if grep -qE "^\s*/(system_ext|system_dlkm|vendor_dlkm|metadata|firmware|persist|
     echo "ERROR: twrp.flags must not duplicate partitions already defined in recovery.fstab!" >&2
     exit 1
 fi
-echo "✓ VINTF manifests (hwservicemanager + 4 device HIDL HALs + KeyMint AIDL) and minimal twrp.flags validated"
+echo "✓ VINTF manifests (hwservicemanager + 3 device HIDL HALs + KeyMint AIDL, no boot HAL) and minimal twrp.flags validated"
 
 # 2. Partition size check
 BC="$TARGET_DIR/BoardConfig.mk"
@@ -105,6 +108,18 @@ grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
 
 INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
+if grep -q "boot-hal-1-2" "$INIT_QCOM"; then
+    echo "ERROR: init.recovery.qcom.rc must NOT start boot-hal-1-2!" >&2
+    exit 1
+fi
+if grep -q "sys.boot_completed" "$INIT_QCOM"; then
+    echo "ERROR: init.recovery.qcom.rc must NOT set sys.boot_completed before /data decrypt!" >&2
+    exit 1
+fi
+if grep -q "rmdir /vendor/firmware_mnt" "$INIT_QCOM"; then
+    echo "ERROR: init.recovery.qcom.rc must NOT contain spurious rmdir /vendor/firmware_mnt!" >&2
+    exit 1
+fi
 grep -q "wait /dev/block/bootdevice/by-name/misc 5" "$INIT_QCOM" || { echo "ERROR: wait misc 5 missing in init.recovery.qcom.rc" >&2; exit 1; }
 grep -q "exec u:r:recovery:s0 root root -- /system/bin/sh /system/bin/clear-bcb.sh" "$INIT_QCOM" || { echo "ERROR: clear-bcb.sh exec missing in init.recovery.qcom.rc" >&2; exit 1; }
 if grep -qE "^\s*umount\s+/vendor" "$INIT_QCOM"; then
@@ -114,10 +129,13 @@ fi
 grep -q "setprop vendor.gatekeeper.disable_spu true" "$INIT_QCOM" || { echo "ERROR: vendor.gatekeeper.disable_spu missing" >&2; exit 1; }
 grep -q "setprop vendor.gatekeeper.is_security_level_spu 0" "$INIT_QCOM" || { echo "ERROR: vendor.gatekeeper.is_security_level_spu missing" >&2; exit 1; }
 grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 trigger missing" >&2; exit 1; }
-grep -q "on property:vendor.twrp.crypto_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.crypto_ready=1 trigger missing" >&2; exit 1; }
+grep -q "on property:vendor.twrp.crypto_hal_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.crypto_hal_ready=1 trigger missing" >&2; exit 1; }
+grep -q "on property:vendor.twrp.keystore_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.keystore_ready=1 trigger missing" >&2; exit 1; }
+grep -q "bs=128" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || { echo "ERROR: clear-bcb.sh must zero 128 bytes!" >&2; exit 1; }
+grep -q "twrp.storage.ready" "$TARGET_DIR/recovery/root/system/bin/override-spl.sh" || { echo "ERROR: override-spl.sh must wait for twrp.storage.ready!" >&2; exit 1; }
 grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
 grep -q "/dev/smcinvoke" "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc" || { echo "ERROR: /dev/smcinvoke rule missing in vendor/etc/ueventd.rc" >&2; exit 1; }
-echo "✓ Step C BoardConfig.mk, device.mk, init.recovery.qcom.rc, and ueventd.rc validated"
+echo "✓ Step C2 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
 # 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)

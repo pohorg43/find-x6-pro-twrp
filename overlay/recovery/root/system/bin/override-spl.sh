@@ -20,21 +20,22 @@ if [ -z "$SLOT" ]; then
 fi
 log "Slot detected: $SLOT"
 
-# Wait up to 15s (30 x 0.5s) for TWRP UnMount_Main_Partitions() to unmount logical /vendor
+# Wait up to 15s (30 x 0.5s) for SetupFstabPartitions() to finish LoadApexImages()
+# (which mounts /vendor a second time), unmount /vendor, and set twrp.storage.ready=1.
 v=0
 while [ "$v" -lt 30 ]; do
-	if ! grep -q " /vendor " /proc/mounts 2>/dev/null; then
+	if [ "$(getprop twrp.storage.ready)" = "1" ] && ! grep -q " /vendor " /proc/mounts 2>/dev/null; then
 		break
 	fi
 	v=$((v + 1))
 	sleep 0.5
 done
 
-if grep -q " /vendor " /proc/mounts 2>/dev/null; then
-	log "ERROR: /vendor still mounted after 15s, skipping crypto stack to avoid loop."
+if [ "$(getprop twrp.storage.ready)" != "1" ] || grep -q " /vendor " /proc/mounts 2>/dev/null; then
+	log "ERROR: storage not ready or /vendor still mounted after 15s (storage=$(getprop twrp.storage.ready)), skipping crypto stack to keep YARP alive."
 	exit 1
 fi
-log "/vendor unmounted cleanly; ramdisk overlay active."
+log "/vendor unmounted cleanly after storage init; ramdisk overlay active."
 
 read_prop_from_block() {
 	MNT="$1"
@@ -119,13 +120,54 @@ log "vendor.twrp.spl_ready=1, waiting up to 15s for vendor.sys.listeners.registe
 i=0
 while [ "$i" -lt 30 ]; do
 	if [ "$(getprop vendor.sys.listeners.registered)" = "true" ]; then
-		setprop vendor.twrp.crypto_ready 1
-		log "vendor.twrp.crypto_ready=1 (listeners registered)"
-		exit 0
+		log "listeners registered; starting QTI crypto HALs (stage 1)"
+		setprop vendor.twrp.crypto_hal_ready 1
+		break
 	fi
 	i=$((i + 1))
 	sleep 0.5
 done
 
-log "ERROR: vendor.sys.listeners.registered!=true after 15s ($(getprop vendor.sys.listeners.registered)); NOT starting keymint/gatekeeper to keep YARP alive."
+if [ "$(getprop vendor.sys.listeners.registered)" != "true" ]; then
+	log "ERROR: vendor.sys.listeners.registered!=true after 15s ($(getprop vendor.sys.listeners.registered)); NOT starting keymint/gatekeeper to keep YARP alive."
+	exit 1
+fi
+
+# Wait up to 10s (20 x 0.5s) for vendor.keymint-qti to stay running, then settle 2s before keystore2
+k=0
+KM_OK=0
+while [ "$k" -lt 20 ]; do
+	if pidof android.hardware.security.keymint-service-qti >/dev/null 2>&1 && \
+	   [ "$(getprop init.svc.vendor.keymint-qti)" = "running" ]; then
+		KM_OK=1
+		break
+	fi
+	k=$((k + 1))
+	sleep 0.5
+done
+
+if [ "$KM_OK" != "1" ]; then
+	log "ERROR: vendor.keymint-qti not running after 10s (svc=$(getprop init.svc.vendor.keymint-qti)); NOT starting keystore2."
+	exit 1
+fi
+
+sleep 2
+log "vendor.keymint-qti active; starting keystore2 (stage 2)"
+setprop vendor.twrp.keystore_ready 1
+
+# Wait up to 5s (10 x 0.5s) for keystore2 to stay running before marking crypto.ready=1
+m=0
+while [ "$m" -lt 10 ]; do
+	if pidof keystore2 >/dev/null 2>&1 && \
+	   [ "$(getprop init.svc.keystore2)" = "running" ]; then
+		setprop crypto.ready 1
+		setprop vendor.twrp.crypto_ready 1
+		log "crypto.ready=1 (keystore2 running after keymint-qti)"
+		exit 0
+	fi
+	m=$((m + 1))
+	sleep 0.5
+done
+
+log "ERROR: keystore2 not running after 5s (svc=$(getprop init.svc.keystore2))"
 exit 1

@@ -13,7 +13,6 @@ on init
     setprop prepdecrypt.setpatch true
     setprop vendor.gatekeeper.disable_spu true
     setprop vendor.gatekeeper.is_security_level_spu 0
-    start boot-hal-1-2
 
 on fs
     wait /dev/block/platform/soc/${ro.boot.bootdevice}
@@ -23,7 +22,6 @@ on fs
     # Mount firmware, persist & symlink /vendor/firmware_mnt BEFORE TWRP starts & temporarily mounts /vendor
     mkdir /firmware 0771 system system
     mount vfat /dev/block/bootdevice/by-name/modem${ro.boot.slot_suffix} /firmware ro
-    rmdir /vendor/firmware_mnt
     symlink /firmware /vendor/firmware_mnt
     mkdir /mnt/vendor 0771 system system
     mkdir /mnt/vendor/persist 0771 system system
@@ -44,13 +42,13 @@ on property:twrp.modules.loaded=true
 on property:vendor.twrp.spl_ready=1
     start vendor.qseecomd
 
-on property:vendor.twrp.crypto_ready=1
+on property:vendor.twrp.crypto_hal_ready=1
     start qseecom-service
     start vendor.keymint-qti
     enable gatekeeper-1-0
     start gatekeeper-1-0
     start vendor.ssgtzd
+
+on property:vendor.twrp.keystore_ready=1
     enable keystore2
     start keystore2
-    setprop sys.boot_completed 1
-    setprop crypto.ready 1
