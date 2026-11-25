@@ -23,9 +23,9 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step A) ==="
 
-# 1. Core structure check
+# 1. Core + Step A structure check
 for required_file in \
     "BoardConfig.mk" \
     "device.mk" \
@@ -33,7 +33,8 @@ for required_file in \
     "recovery.fstab" \
     "libinit/libinit_oplus_sm8550.cpp" \
     "recovery/root/init.recovery.qcom.rc" \
-    "recovery/root/vendor/bin/override-spl.sh" \
+    "recovery/root/system/bin/clear-bcb.sh" \
+    "recovery/root/vendor/etc/ueventd.rc" \
     "recovery/root/vendor/bin/qseecomd" \
     "recovery/root/vendor/bin/ssgtzd" \
     "recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti" \
@@ -43,20 +44,27 @@ for required_file in \
     "recovery/root/vendor/lib64/libqtikeymint.so" \
     "recovery/root/system/lib64/android.hardware.security.keymint-V2-ndk.so" \
     "recovery/root/system/lib64/libcurl.so" \
-    "recovery/root/system/lib64/libfmq.so" \
-    "recovery/root/vendor/etc/ueventd.rc" \
-    "recovery/root/vendor/etc/ssg/ta_config.json" \
-    "recovery/root/vendor/etc/gpfspath_oem_config.xml" \
-    "recovery/root/vendor/etc/vintf/manifest.xml" \
-    "recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml" \
-    "recovery/root/system/etc/vintf/manifest.xml" \
-    "recovery/root/system/etc/twrp.flags"; do
+    "recovery/root/system/lib64/libfmq.so"; do
     if [ ! -f "$TARGET_DIR/$required_file" ]; then
         echo "ERROR: Required file $required_file not found in $TARGET_DIR" >&2
         exit 1
     fi
 done
-echo "✓ Core + Stage 2 structure validated"
+[ -x "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" ] || { echo "ERROR: clear-bcb.sh is not executable!" >&2; exit 1; }
+echo "✓ Core + Step A structure (clear-bcb.sh +0755) validated"
+
+# 1b. Verify Step A isolation from keystore2/VINTF/twrp.flags conflicts
+for forbidden_file in \
+    "recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml" \
+    "recovery/root/vendor/etc/vintf/manifest.xml" \
+    "recovery/root/system/etc/vintf/manifest.xml" \
+    "recovery/root/system/etc/twrp.flags"; do
+    if [ -e "$TARGET_DIR/$forbidden_file" ]; then
+        echo "ERROR: $forbidden_file must be parked during Step A isolation!" >&2
+        exit 1
+    fi
+done
+echo "✓ Step A VINTF / twrp.flags isolation verified"
 
 # 2. Partition size check
 BC="$TARGET_DIR/BoardConfig.mk"
@@ -67,7 +75,7 @@ if [[ "$PART_SIZE_LINE" != *"104857600"* && "$PART_SIZE_LINE" != *"0x6400000"* ]
 fi
 echo "✓ Recovery partition size validated: 104857600 bytes"
 
-# 3. Stage 2 BoardConfig / device.mk invariants
+# 3. Stage 2 BoardConfig / device.mk / init.recovery.qcom.rc invariants
 if grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*true" "$BC"; then
     echo "ERROR: TW_INCLUDE_OMAPI must be disabled (false) for PGEM10" >&2
     exit 1
@@ -76,21 +84,35 @@ grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*false" "$BC" || { echo "ERROR: TW_INCLUDE_
 grep -qE "^\s*BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_DUP_RULES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
-INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
-grep -q "rmdir /vendor/firmware_mnt" "$INIT_QCOM" || { echo "ERROR: rmdir /vendor/firmware_mnt missing in init.recovery.qcom.rc" >&2; exit 1; }
-grep -q "on property:vendor.twrp.spl_ready=1" "$INIT_QCOM" || { echo "ERROR: vendor.twrp.spl_ready=1 gate missing in init.recovery.qcom.rc" >&2; exit 1; }
-echo "✓ Stage 2 BoardConfig.mk (OMAPI disabled, ELF prebuilt copy broken flag), device.mk, and init ordering validated"
 
-# 4. Module list completeness & duplicate check
+INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
+grep -q "wait /dev/block/bootdevice/by-name/misc 5" "$INIT_QCOM" || { echo "ERROR: wait /dev/block/bootdevice/by-name/misc 5 missing in init.recovery.qcom.rc" >&2; exit 1; }
+grep -q "exec u:r:recovery:s0 root root -- /system/bin/sh /system/bin/clear-bcb.sh" "$INIT_QCOM" || { echo "ERROR: clear-bcb.sh exec missing in init.recovery.qcom.rc" >&2; exit 1; }
+if grep -qE "keymint-qti|gatekeeper-1-0|qseecomd|override-spl|ssgtzd" "$INIT_QCOM"; then
+    echo "ERROR: Crypto daemons must not be launched in Step A init.recovery.qcom.rc!" >&2
+    exit 1
+fi
+grep -q "/dev/smcinvoke" "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc" || { echo "ERROR: /dev/smcinvoke rule missing in vendor/etc/ueventd.rc" >&2; exit 1; }
+echo "✓ Step A BoardConfig.mk, device.mk, init.recovery.qcom.rc, and ueventd.rc validated"
+
+# 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
 [ -n "$MOD_LINE" ] || { echo "ERROR: TW_LOAD_VENDOR_MODULES missing from BoardConfig.mk" >&2; exit 1; }
 for mod in \
     qcom_glink.ko rproc_qcom_common.ko qcom_q6v5_pas.ko adsp_loader_dlkm.ko \
-    pmic_glink.ko oplus_chg.ko oplus_chg_v2.ko oplus_chg_symbol.ko \
+    pmic_glink.ko oplus_chg.ko \
     qseecom_proxy.ko smcinvoke_dlkm.ko \
     synaptics_tcm2.ko panel_event_notifier.ko olc.ko oplus_bsp_tp_custom.ko oplus_bsp_tp_comon.ko; do
     if ! grep -qw "$mod" <<<"$MOD_LINE"; then
-        echo "ERROR: Required Stage 2 module $mod missing from TW_LOAD_VENDOR_MODULES" >&2
+        echo "ERROR: Required Step A module $mod missing from TW_LOAD_VENDOR_MODULES" >&2
+        exit 1
+    fi
+done
+for removed_mod in \
+    oplus_chg_v2.ko oplus_chg_symbol.ko ufcs_class.ko dwc3-msm.ko redriver.ko \
+    wcd_usbss_i2c.ko ucsi_glink.ko i2c-msm-geni.ko gh_mem_notifier.ko gh_irq_lend.ko; do
+    if grep -qw "$removed_mod" <<<"$MOD_LINE"; then
+        echo "ERROR: Excluded module $removed_mod still present in TW_LOAD_VENDOR_MODULES" >&2
         exit 1
     fi
 done
@@ -177,7 +199,6 @@ roots = [
     os.path.join(root, "vendor/lib64/libqtikeymint.so"),
 ]
 
-# Standard system/TWRP libraries built by AOSP when validating overlay pre-build
 aosp_system_libs = {
     "android.hardware.security.secureclock-V1-ndk.so",
     "android.hardware.security.sharedsecret-V1-ndk.so",
@@ -237,7 +258,7 @@ while queue:
                 found = cand
                 break
         if found:
-            if strict or found.startswith(os.path.join(root, "vendor")) or soname == "android.hardware.security.keymint-V2-ndk.so":
+            if strict or found.startswith(os.path.join(root, "vendor")) or soname in ("android.hardware.security.keymint-V2-ndk.so", "libcurl.so", "libfmq.so"):
                 queue.append(found)
         else:
             if not strict and soname in aosp_system_libs:
