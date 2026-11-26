@@ -157,7 +157,7 @@ sleep 2
 log "vendor.keymint-qti active; starting keystore2 (stage 2)"
 setprop vendor.twrp.keystore_ready 1
 
-# Wait up to 5s (10 x 0.5s) for keystore2 to start, then verify the same PID stays alive for 1s
+# Wait up to 5s (10 x 0.5s) for keystore2 to start, then stabilize PID against syncKeystoreDb() restart
 KS_PID=""
 m=0
 while [ "$m" -lt 10 ]; do
@@ -177,17 +177,41 @@ if [ -z "$KS_PID" ]; then
 	exit 1
 fi
 
-sleep 1
-CUR_PID=$(pidof keystore2 2>/dev/null || true)
-CUR_PID=${CUR_PID%% *}
-if [ -n "$CUR_PID" ] && [ "$CUR_PID" = "$KS_PID" ] && \
-   [ -d "/proc/$KS_PID" ] && \
-   [ "$(getprop init.svc.keystore2)" = "running" ]; then
-	setprop crypto.ready 1
-	setprop vendor.twrp.crypto_ready 1
-	log "crypto.ready=1 (keystore2 pid=$KS_PID running cleanly after 1s check)"
-	exit 0
-fi
+retry=0
+while [ "$retry" -lt 4 ]; do
+	sleep 1
+	SVC_STATE=$(getprop init.svc.keystore2)
+	CRASH_COUNT=$(getprop keystore.crash_count)
+	case "$CRASH_COUNT" in
+		''|*[!0-9]*) CRASH_COUNT=0 ;;
+	esac
+	CUR_PID=$(pidof keystore2 2>/dev/null || true)
+	CUR_PID=${CUR_PID%% *}
 
-log "ERROR: keystore2 crashed or restarted after start (initial_pid=$KS_PID, current_pid=${CUR_PID:-none}, svc=$(getprop init.svc.keystore2)); NOT setting crypto.ready=1"
+	if [ "$CRASH_COUNT" -ge 3 ] || [ "$SVC_STATE" = "stopped" ] || [ "$SVC_STATE" = "restarting" ]; then
+		log "ERROR: keystore2 crash-loop/stopped (prev_pid=$KS_PID, cur_pid=${CUR_PID:-none}, svc=$SVC_STATE, crash_count=$CRASH_COUNT); NOT setting crypto.ready=1"
+		exit 1
+	fi
+
+	if [ -n "$CUR_PID" ] && [ -d "/proc/$CUR_PID" ] && [ "$SVC_STATE" = "running" ]; then
+		if [ "$CUR_PID" = "$KS_PID" ]; then
+			setprop crypto.ready 1
+			setprop vendor.twrp.crypto_ready 1
+			log "crypto.ready=1 (keystore2 pid=$KS_PID running cleanly after 1s check, crash_count=$CRASH_COUNT)"
+			exit 0
+		fi
+		retry=$((retry + 1))
+		if [ "$retry" -lt 4 ]; then
+			log "keystore2 PID changed while running (syncKeystoreDb restart: $KS_PID -> $CUR_PID, crash_count=$CRASH_COUNT); accepting new PID (check $retry/3)"
+			KS_PID="$CUR_PID"
+			continue
+		fi
+		break
+	fi
+
+	log "ERROR: keystore2 exited unexpectedly (prev_pid=$KS_PID, cur_pid=${CUR_PID:-none}, svc=$SVC_STATE, crash_count=$CRASH_COUNT); NOT setting crypto.ready=1"
+	exit 1
+done
+
+log "ERROR: keystore2 PID did not stabilize after retries (last_pid=$KS_PID, svc=$(getprop init.svc.keystore2), crash_count=$(getprop keystore.crash_count)); NOT setting crypto.ready=1"
 exit 1

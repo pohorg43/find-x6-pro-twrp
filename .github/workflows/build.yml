@@ -68,7 +68,7 @@ jobs:
           echo "- Base Tree SHA: $REF_TREE_SM8550_SHA"
           echo "- Patches applied cleanly: 0 *.rej files"
           echo "- Battery + SMCInvoke + Synaptics TCM2 minimal module chain (45 .ko) verified"
-          echo "- Step C VINTF (hwservicemanager + 4 device HIDL HALs + KeyMint V2 AIDL), clear-bcb + override-spl in /system/bin, and ELF closure verified"
+          echo "- Step D VINTF (hwservicemanager + boot@1.2 + health@2.1 + gatekeeper@1.0 + qseecom@1.0 + KeyMint V2 AIDL), Boot HAL 1.2 libs, clear-bcb + override-spl PID loop, twrp.flags (A/B + backup-only EFS), no my_colorospro, TW_NO_FLASH_CURRENT_TWRP, and ELF closure verified"
           echo "- Clean header config: PLATFORM_VERSION=13 / PLATFORM_SECURITY_PATCH=2025-11-01"
           echo "- Remote manifest reachable: $REF_MANIFEST_A16 ($REF_MANIFEST_BRANCH)"
           echo "=================================================="
@@ -232,6 +232,100 @@ jobs:
           PYEOF
           diff -u /tmp/keystore2.rc.orig bootable/recovery/etc/init/keystore2.rc || [ $? -eq 1 ]
           rm -f /tmp/keystore2.rc.orig
+
+          echo "=== Applying Step D patches to vendor/twrp and bootable/recovery ==="
+          python3 - <<'PYEOF'
+          from pathlib import Path
+          import subprocess, tempfile
+
+          def patch_file(path_str, replacements):
+              p = Path(path_str)
+              orig = p.read_text()
+              backup = Path(tempfile.gettempdir()) / (p.name + ".orig")
+              backup.write_text(orig)
+              src = orig
+              for label, target, repl in replacements:
+                  cnt = src.count(target)
+                  assert cnt == 1, f"{path_str} [{label}]: expected 1 match, found {cnt}"
+                  src = src.replace(target, repl, 1)
+              p.write_text(src)
+              subprocess.run(["diff", "-u", str(backup), path_str], check=False)
+              backup.unlink(missing_ok=True)
+
+          # 1. Propagate TW_NO_FLASH_CURRENT_TWRP through BoardConfigSoong.mk & bootable/recovery/twrp_flags.go
+          patch_file("vendor/twrp/config/BoardConfigSoong.mk", [
+              (
+                  "export TW_NO_FLASH_CURRENT_TWRP",
+                  "    AB_OTA_UPDATER \\\n",
+                  "    AB_OTA_UPDATER \\\n    TW_NO_FLASH_CURRENT_TWRP \\\n",
+              ),
+          ])
+          patch_file("bootable/recovery/twrp_flags.go", [
+              (
+                  "TW_NO_FLASH_CURRENT_TWRP",
+                  "\tif makeBoolValue(getVar(\"AB_OTA_UPDATER\")) {\n\t\tflags = append(flags, \"-DAB_OTA_UPDATER=1\")\n\t}\n",
+                  "\tif makeBoolValue(getVar(\"AB_OTA_UPDATER\")) {\n\t\tflags = append(flags, \"-DAB_OTA_UPDATER=1\")\n\t}\n\tif makeBoolValue(getVar(\"TW_NO_FLASH_CURRENT_TWRP\")) {\n\t\tflags = append(flags, \"-DTW_NO_FLASH_CURRENT_TWRP\")\n\t}\n",
+              ),
+          ])
+
+          # 2. Hide unsafe tools for PGEM10 in twrp_tools_backend.cpp (keep TW_HAS_DATA_MEDIA intact)
+          patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
+              (
+                  "hide disable_avb2/fix_contexts/install_kernel",
+                  "  result.disable_avb2 = true;\n  result.fix_contexts = flag(TW_HAS_DATA_MEDIA);\n  const bool repack = flag(\"tw_has_boot_slots\") && flag(\"tw_has_repack_tools\");\n  result.install_ramdisk = repack && flag(\"tw_include_install_recovery_ramdisk\");\n  result.reflash_twrp =\n      repack && !flag(\"tw_no_flash_current_twrp\") && !flag(\"tw_is_vendor_boot_header_v3\");\n  result.install_kernel = repack;\n",
+                  "  result.disable_avb2 = false;\n  result.fix_contexts = false;\n  const bool repack = flag(\"tw_has_boot_slots\") && flag(\"tw_has_repack_tools\");\n  result.install_ramdisk = repack && flag(\"tw_include_install_recovery_ramdisk\");\n  result.reflash_twrp =\n      repack && !flag(\"tw_no_flash_current_twrp\") && !flag(\"tw_is_vendor_boot_header_v3\");\n  result.install_kernel = false;\n",
+              ),
+          ])
+
+          # 3. Hide orphan tw_auto_disable_avb2 checkbox and fix Backup/Restore Options tab scroll in gui2.cpp
+          patch_file("bootable/recovery/gui2/gui2.cpp", [
+              (
+                  "gate tw_auto_disable_avb2",
+                  "  add(nullptr, text.general_disable_avb2, \"tw_auto_disable_avb2\");\n",
+                  "  if (tools != nullptr && tools->availability().disable_avb2)\n    add(nullptr, text.general_disable_avb2, \"tw_auto_disable_avb2\");\n",
+              ),
+              (
+                  "backup_option_event_cb scroll settle+clamp",
+                  "  else if (*target == kBackupEncryptTarget) {\n    page_state.backup_encrypt = checked;\n    gui2_pages::show_backup_password(page_state.backup_view, checked);\n  }\n",
+                  "  else if (*target == kBackupEncryptTarget) {\n    const int scroll_y = main_content == nullptr ? 0 : lv_obj_get_scroll_y(main_content);\n    page_state.backup_encrypt = checked;\n    gui2_pages::show_backup_password(page_state.backup_view, checked);\n    if (main_content != nullptr) lv_obj_scroll_to_y(main_content, 0, LV_ANIM_OFF);\n    page_host.settle();\n    if (main_content != nullptr && lv_obj_has_flag(main_content, LV_OBJ_FLAG_SCROLLABLE)) {\n      const int max_scroll = std::max(0, static_cast<int>(lv_obj_get_scroll_bottom(main_content)));\n      lv_obj_scroll_to_y(main_content, std::clamp(scroll_y, 0, max_scroll), LV_ANIM_OFF);\n    }\n  }\n",
+              ),
+              (
+                  "backup_tab_changed scroll reset + settle",
+                  "static void backup_tab_changed(size_t index, void*) {\n  page_state.backup_active_tab = index;\n  gui2_pages::show_backup_tab(page_state.backup_view, index);\n  if (hardware != nullptr) hardware->vibrate(gui2_backend::haptic_channel::BUTTON);\n}\n",
+                  "static void backup_tab_changed(size_t index, void*) {\n  page_state.backup_active_tab = index;\n  gui2_pages::show_backup_tab(page_state.backup_view, index);\n  if (main_content != nullptr) lv_obj_scroll_to_y(main_content, 0, LV_ANIM_OFF);\n  page_host.settle();\n  if (hardware != nullptr) hardware->vibrate(gui2_backend::haptic_channel::BUTTON);\n}\n",
+              ),
+              (
+                  "restore_tab_changed scroll reset + settle",
+                  "static void restore_tab_changed(size_t index, void*) {\n  page_state.restore_active_tab = index;\n  gui2_pages::show_restore_tab(page_state.restore_view, index);\n  if (hardware != nullptr) hardware->vibrate(gui2_backend::haptic_channel::BUTTON);\n}\n",
+                  "static void restore_tab_changed(size_t index, void*) {\n  page_state.restore_active_tab = index;\n  gui2_pages::show_restore_tab(page_state.restore_view, index);\n  if (main_content != nullptr) lv_obj_scroll_to_y(main_content, 0, LV_ANIM_OFF);\n  page_host.settle();\n  if (hardware != nullptr) hardware->vibrate(gui2_backend::haptic_channel::BUTTON);\n}\n",
+              ),
+          ])
+
+          # 4. Restrict single-line textareas to horizontal scrolling so vertical swipe scrolls page
+          patch_file("bootable/recovery/gui2/pages/backup_page.cpp", [
+              (
+                  "backup_page input LV_DIR_HOR",
+                  "  lv_obj_t* input = lv_textarea_create(parent);\n  lv_textarea_set_one_line(input, true);\n",
+                  "  lv_obj_t* input = lv_textarea_create(parent);\n  lv_textarea_set_one_line(input, true);\n  lv_obj_set_scroll_dir(input, LV_DIR_HOR);\n",
+              ),
+          ])
+          patch_file("bootable/recovery/gui2/pages/restore_page.cpp", [
+              (
+                  "restore_page input LV_DIR_HOR",
+                  "    view.password_input = lv_textarea_create(view.options_pane);\n    lv_textarea_set_one_line(view.password_input, true);\n",
+                  "    view.password_input = lv_textarea_create(view.options_pane);\n    lv_textarea_set_one_line(view.password_input, true);\n    lv_obj_set_scroll_dir(view.password_input, LV_DIR_HOR);\n",
+              ),
+          ])
+
+          # 5. Suppress 4 Hz AIDL health fallback spam in battery_utils.cpp (log once, keep HIDL polling intact)
+          patch_file("bootable/recovery/recovery_utils/battery_utils.cpp", [
+              (
+                  "log AIDL health fallback once",
+                  "  if (health == nullptr) {\n    LOG(INFO) << \"Unable to get AIDL health service, trying HIDL...\";\n",
+                  "  if (health == nullptr) {\n    static bool logged_aidl_unavailable = false;\n    if (!logged_aidl_unavailable) {\n      LOG(INFO) << \"Unable to get AIDL health service, trying HIDL...\";\n      logged_aidl_unavailable = true;\n    }\n",
+              ),
+          ])
+          PYEOF
 
           lunch twrp_sm8550-aosp_current-eng
 

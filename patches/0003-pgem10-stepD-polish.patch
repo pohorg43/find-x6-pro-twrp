@@ -1,0 +1,42 @@
+diff --git a/BoardConfig.mk b/BoardConfig.mk
+index ac27d17..9dc40fa 100644
+--- a/BoardConfig.mk
++++ b/BoardConfig.mk
+@@ -62,7 +62,6 @@ AB_OTA_PARTITIONS := \
+ AB_OTA_PARTITIONS += \
+     my_bigball \
+     my_carrier \
+-    my_colorospro \
+     my_company \
+     my_engineering \
+     my_heytap \
+@@ -113,7 +112,7 @@ BOARD_SUPER_PARTITION_SIZE              := 9126805504
+ BOARD_SUPER_PARTITION_GROUPS            := qti_dynamic_partitions
+ BOARD_QTI_DYNAMIC_PARTITIONS_SIZE       := 9122611200
+ BOARD_QTI_DYNAMIC_PARTITIONS_PARTITION_LIST := system system_ext product vendor vendor_dlkm system_dlkm odm
+-BOARD_QTI_DYNAMIC_PARTITIONS_PARTITION_LIST += my_bigball my_carrier my_colorospro my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_stock
++BOARD_QTI_DYNAMIC_PARTITIONS_PARTITION_LIST += my_bigball my_carrier my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_stock
+ 
+ BOARD_RECOVERYIMAGE_PARTITION_SIZE      := 104857600
+ 
+@@ -199,6 +198,7 @@ TW_EXTRA_LANGUAGES              := true
+ TW_INCLUDE_FASTBOOTD            := true
+ TW_INCLUDE_RESETPROP            := true
+ TW_INCLUDE_REPACKTOOLS          := true
++TW_NO_FLASH_CURRENT_TWRP        := true
+ TW_INCLUDE_7ZA                  := true
+ TW_INCLUDE_ZSTD                 := true
+ TW_NO_EXFAT_FUSE                := true
+diff --git a/recovery.fstab b/recovery.fstab
+index f08fc76..d6f29b9 100644
+--- a/recovery.fstab
++++ b/recovery.fstab
+@@ -63,8 +63,6 @@ my_manifest                                /my_manifest           ext4    ro,bar
+ my_manifest                                /my_manifest           erofs   ro                                                                                              wait,slotselect,logical,first_stage_mount,nofail
+ my_engineering                             /my_engineering        ext4    ro,barrier=1                                                                                    wait,slotselect,logical,first_stage_mount,nofail
+ my_engineering                             /my_engineering        erofs   ro                                                                                              wait,slotselect,logical,first_stage_mount,nofail
+-my_colorospro                              /my_colorospro         ext4    ro,barrier=1                                                                                    wait,slotselect,logical,first_stage_mount,nofail
+-my_colorospro                              /my_colorospro         erofs   ro                                                                                              wait,slotselect,logical,first_stage_mount,nofail
+ vendor_dlkm                                /vendor_dlkm           ext4    ro,barrier=1,discard                                                                            wait,slotselect,avb=vbmeta_vendor,logical,first_stage_mount
+ vendor_dlkm                                /vendor_dlkm           erofs   ro                                                                                              wait,slotselect,avb=vbmeta_vendor,logical,first_stage_mount
+ system_dlkm                                /system_dlkm           ext4    ro,barrier=1,discard                                                                            wait,slotselect,avb=vbmeta_system,logical,first_stage_mount,avb_keys=/avb/q-gsi.avbpubkey:/avb/r-gsi.avbpubkey:/avb/s-gsi.avbpubkey

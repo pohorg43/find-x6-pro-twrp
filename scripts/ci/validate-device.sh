@@ -23,9 +23,9 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C4) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step D) ==="
 
-# 1. Core + Step C structure check
+# 1. Core + Step C/D structure check
 for required_file in \
     "BoardConfig.mk" \
     "device.mk" \
@@ -54,8 +54,11 @@ for required_file in \
     "recovery/root/vendor/bin/hw/android.hardware.security.keymint-service-qti" \
     "recovery/root/vendor/bin/hw/android.hardware.gatekeeper@1.0-service-qti" \
     "recovery/root/vendor/bin/hw/vendor.qti.hardware.qseecom@1.0-service" \
+    "recovery/root/vendor/lib64/hw/android.hardware.boot@1.0-impl-1.2-qti.so" \
     "recovery/root/vendor/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so" \
     "recovery/root/vendor/lib64/hw/vendor.qti.hardware.qseecom@1.0-impl.so" \
+    "recovery/root/vendor/lib64/libboot_control_qti.so" \
+    "recovery/root/vendor/lib64/librecovery_updater.so" \
     "recovery/root/vendor/lib64/librpmb.so" \
     "recovery/root/vendor/lib64/libgpt.so" \
     "recovery/root/vendor/lib64/libssd.so" \
@@ -168,11 +171,106 @@ sleep1_m = re.search(r"^\s*sleep\s+1(\s|$)", tail, re.M)
 if not pid_cap_m or not svc_m1 or not sleep1_m:
     raise AssertionError(f"{fp}: must wait for keystore2 PID + init.svc.keystore2 and sleep 1 before crypto.ready=1")
 
-after_sleep1 = tail[sleep1_m.end():crypto_ready_m.start() - ks_ready_m.end()]
-if "pidof" not in after_sleep1 or "keystore2" not in after_sleep1 or "init.svc.keystore2" not in after_sleep1:
+after_sleep1 = tail[sleep1_m.end():]
+for marker, msg in [
+    ("while ", "must stabilize keystore2 PID in a retry loop"),
+    ("keystore.crash_count", "must check keystore.crash_count against crash-loop"),
+    ("KS_PID=\"$CUR_PID\"", "must accept single clean PID change when init.svc.keystore2=running"),
+    ("stopped", "must fail when keystore2 service is stopped or restarting"),
+]:
+    if marker not in after_sleep1 and marker not in tail:
+        raise AssertionError(f"{fp}: {msg}")
+
+pre_crypto = tail[sleep1_m.end():crypto_ready_m.start() - ks_ready_m.end()]
+if "pidof" not in pre_crypto or "keystore2" not in pre_crypto or "init.svc.keystore2" not in pre_crypto:
     raise AssertionError(f"{fp}: must re-verify same keystore2 PID and init.svc.keystore2=running after sleep 1 before setting crypto.ready=1")
-if not re.search(r'"?\$\{?CUR_PID\}?"?\s*=\s*"?\$\{?KS_PID\}?"?', after_sleep1):
-    raise AssertionError(f"{fp}: must verify PID equality after sleep 1 against initial keystore2 PID")
+if not re.search(r'"?\$\{?CUR_PID\}?"?\s*=\s*"?\$\{?KS_PID\}?"?', pre_crypto):
+    raise AssertionError(f"{fp}: must verify PID equality after sleep 1 before setting crypto.ready=1")
+PYEOF
+}
+
+validate_twrp_flags() {
+    local flags_path="$1"
+    python3 - "$flags_path" <<'PYEOF'
+import re, sys
+
+fp = sys.argv[1]
+lines = [l.strip() for l in open(fp, "r", encoding="utf-8") if l.strip() and not l.strip().startswith("#")]
+
+entries = {}
+for line in lines:
+    parts = line.split()
+    entries[parts[0]] = line
+
+if "/usbstorage" not in entries:
+    raise AssertionError(f"{fp}: missing /usbstorage")
+
+for forbidden in ("/system_ext", "/system_dlkm", "/vendor_dlkm", "/metadata", "/firmware", "/persist", "/misc", "/userdata", "/system", "/vendor", "/product", "/odm"):
+    if forbidden in entries:
+        raise AssertionError(f"{fp}: must not duplicate recovery.fstab entry {forbidden}")
+
+expected_ab = {
+    "/recovery": ("/dev/block/bootdevice/by-name/recovery", 'display="Recovery"'),
+    "/boot": ("/dev/block/bootdevice/by-name/boot", 'display="Boot"'),
+    "/init_boot": ("/dev/block/bootdevice/by-name/init_boot", 'display="Init Boot"'),
+    "/vendor_boot": ("/dev/block/bootdevice/by-name/vendor_boot", 'display="Vendor Boot"'),
+    "/dtbo": ("/dev/block/bootdevice/by-name/dtbo", 'display="DTBO"'),
+}
+for mnt, (dev, disp) in expected_ab.items():
+    if mnt not in entries:
+        raise AssertionError(f"{fp}: missing A/B partition {mnt}")
+    line = entries[mnt]
+    for req in ("emmc", dev, disp, "slotselect", "flashimg=1", "backup=1"):
+        if req not in line:
+            raise AssertionError(f"{fp}: {mnt} missing required field/flag '{req}' -> {line}")
+
+expected_efs = {
+    "/efs1": ("/dev/block/bootdevice/by-name/modemst1", 'display="EFS"'),
+    "/efs2": ("/dev/block/bootdevice/by-name/modemst2", "subpartitionof=/efs1"),
+    "/efsg": ("/dev/block/bootdevice/by-name/fsg", "subpartitionof=/efs1"),
+    "/efsc": ("/dev/block/bootdevice/by-name/fsc", "subpartitionof=/efs1"),
+}
+for mnt, (dev, extra) in expected_efs.items():
+    if mnt not in entries:
+        raise AssertionError(f"{fp}: missing EFS backup-only partition {mnt}")
+    line = entries[mnt]
+    for req in ("emmc", dev, "backup=1", extra):
+        if req not in line:
+            raise AssertionError(f"{fp}: {mnt} missing required backup-only field '{req}' -> {line}")
+    for banned in ("flashimg", "wipeingui", "formattable", "slotselect", "storage"):
+        if banned in line:
+            raise AssertionError(f"{fp}: EFS {mnt} MUST NOT contain '{banned}' -> {line}")
+PYEOF
+}
+
+validate_vendor_vintf() {
+    local ven_vintf="$1"
+    python3 - "$ven_vintf" <<'PYEOF'
+import sys, xml.etree.ElementTree as ET
+fp = sys.argv[1]
+root = ET.parse(fp).getroot()
+hals = {}
+for hal in root.findall("hal"):
+    name_el = hal.find("name")
+    tr_el = hal.find("transport")
+    if name_el is not None and name_el.text:
+        hals[name_el.text.strip()] = (
+            hal.attrib.get("format"),
+            tr_el.text.strip() if tr_el is not None and tr_el.text else None,
+            {fq.text.strip() for fq in hal.findall("fqname") if fq.text},
+        )
+required = {
+    "android.hardware.boot": ("hidl", "hwbinder", "@1.2::IBootControl/default"),
+    "android.hardware.health": ("hidl", "hwbinder", "@2.1::IHealth/default"),
+    "android.hardware.gatekeeper": ("hidl", "hwbinder", "@1.0::IGatekeeper/default"),
+    "vendor.qti.hardware.qseecom": ("hidl", "hwbinder", "@1.0::IQSEECom/default"),
+}
+for name, (fmt, tr, fq) in required.items():
+    if name not in hals:
+        raise AssertionError(f"{fp}: missing HAL {name}")
+    got_fmt, got_tr, got_fqs = hals[name]
+    if got_fmt != fmt or got_tr != tr or fq not in got_fqs:
+        raise AssertionError(f"{fp}: HAL {name} mismatch: got fmt={got_fmt} tr={got_tr} fqs={sorted(got_fqs)}")
 PYEOF
 }
 
@@ -208,19 +306,13 @@ validate_vintf_keymint_fragments "$TARGET_DIR/recovery/root" "pre-build"
 grep -q "android.hidl.manager" "$SYS_VINTF" && grep -q "@1.2::IServiceManager/default" "$SYS_VINTF" || {
     echo "ERROR: android.hidl.manager@1.2::IServiceManager/default missing in system VINTF manifest!" >&2; exit 1;
 }
-if grep -q "android.hardware.boot" "$VEN_VINTF"; then
-    echo "ERROR: android.hardware.boot must NOT be in vendor/etc/vintf/manifest.xml (blocks recovery BootControlClient::WaitForService)!" >&2; exit 1;
+validate_vendor_vintf "$VEN_VINTF"
+if [ -e "$TARGET_DIR/recovery/root/vendor/etc/init/android.hardware.boot@1.2-service.rc" ]; then
+    echo "ERROR: vendor/etc/init/android.hardware.boot@1.2-service.rc conflicts with /system/etc/init/android.hardware.boot@1.2-service.rc!" >&2; exit 1;
 fi
-for hal in android.hardware.health android.hardware.gatekeeper vendor.qti.hardware.qseecom; do
-    grep -q "$hal" "$VEN_VINTF" || { echo "ERROR: $hal missing in vendor/etc/vintf/manifest.xml" >&2; exit 1; }
-done
 TWRP_FLAGS="$TARGET_DIR/recovery/root/system/etc/twrp.flags"
-grep -q "/usbstorage" "$TWRP_FLAGS" || { echo "ERROR: /usbstorage missing in twrp.flags" >&2; exit 1; }
-if grep -qE "^\s*/(system_ext|system_dlkm|vendor_dlkm|metadata|firmware|persist|boot|recovery)\b" "$TWRP_FLAGS"; then
-    echo "ERROR: twrp.flags must not duplicate partitions already defined in recovery.fstab!" >&2
-    exit 1
-fi
-echo "✓ VINTF manifests (hwservicemanager + 3 device HIDL HALs + KeyMint V2 AIDL framework+device, no boot HAL) and minimal twrp.flags validated"
+validate_twrp_flags "$TWRP_FLAGS"
+echo "✓ VINTF manifests (hwservicemanager + 4 device HIDL HALs incl. boot@1.2 + KeyMint V2 AIDL framework+device) and Step D twrp.flags validated"
 
 # 2. Partition size check
 BC="$TARGET_DIR/BoardConfig.mk"
@@ -237,15 +329,30 @@ if grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*true" "$BC"; then
     exit 1
 fi
 grep -qE "^\s*TW_INCLUDE_OMAPI\s*:=\s*false" "$BC" || { echo "ERROR: TW_INCLUDE_OMAPI := false missing in BoardConfig.mk" >&2; exit 1; }
+grep -qE "^\s*TW_NO_FLASH_CURRENT_TWRP\s*:=\s*true" "$BC" || { echo "ERROR: TW_NO_FLASH_CURRENT_TWRP := true missing in BoardConfig.mk" >&2; exit 1; }
+if grep -qw "my_colorospro" "$BC" || grep -qw "my_colorospro" "$TARGET_DIR/recovery.fstab"; then
+    echo "ERROR: my_colorospro must be removed from BoardConfig.mk and recovery.fstab!" >&2
+    exit 1
+fi
 grep -qE "^\s*BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "^\s*BUILD_BROKEN_DUP_RULES\s*:=\s*true" "$BC" || { echo "ERROR: BUILD_BROKEN_DUP_RULES := true missing in BoardConfig.mk" >&2; exit 1; }
 grep -q "find-copy-subdir-files" "$TARGET_DIR/device.mk" || { echo "ERROR: device.mk must copy full recovery/root via find-copy-subdir-files" >&2; exit 1; }
 
 INIT_QCOM="$TARGET_DIR/recovery/root/init.recovery.qcom.rc"
-if grep -q "boot-hal-1-2" "$INIT_QCOM"; then
-    echo "ERROR: init.recovery.qcom.rc must NOT start boot-hal-1-2!" >&2
+grep -q "start boot-hal-1-2" "$INIT_QCOM" || {
+    echo "ERROR: init.recovery.qcom.rc must start boot-hal-1-2 in on fs!" >&2
     exit 1
-fi
+}
+python3 - "$INIT_QCOM" <<'PYEOF'
+import sys
+src = open(sys.argv[1]).read()
+idx_bcb = src.find("clear-bcb.sh")
+idx_bsg = src.find("wait /dev/ufs-bsg0")
+idx_boot = src.find("start boot-hal-1-2")
+if idx_bcb == -1 or idx_bsg == -1 or idx_boot == -1 or not (idx_bcb < idx_bsg < idx_boot):
+    print("ERROR: init.recovery.qcom.rc must run clear-bcb.sh -> wait /dev/ufs-bsg0 -> start boot-hal-1-2 in order", file=sys.stderr)
+    sys.exit(1)
+PYEOF
 if grep -q "sys.boot_completed" "$INIT_QCOM"; then
     echo "ERROR: init.recovery.qcom.rc must NOT set sys.boot_completed before /data decrypt!" >&2
     exit 1
@@ -285,7 +392,40 @@ grep -q "bs=128" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || { echo "
 validate_override_spl "$TARGET_DIR/recovery/root/system/bin/override-spl.sh"
 grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
 validate_ueventd_vendor "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
-echo "✓ Step C4 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
+echo "✓ Step D BoardConfig.mk (no my_colorospro, TW_NO_FLASH_CURRENT_TWRP), recovery.fstab, device.mk, init.recovery.qcom.rc (boot-hal-1-2), clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
+
+# 3b. Verify Step D bootable/recovery + vendor/twrp patches in .github/workflows/build.yml
+BUILD_YML="$REPO_ROOT/.github/workflows/build.yml"
+[ -f "$BUILD_YML" ] || { echo "ERROR: $BUILD_YML not found!" >&2; exit 1; }
+python3 - "$BUILD_YML" <<'PYEOF'
+import sys
+src = open(sys.argv[1], "r", encoding="utf-8").read()
+required_in_yml = [
+    ("BoardConfigSoong.mk TW_NO_FLASH_CURRENT_TWRP", "vendor/twrp/config/BoardConfigSoong.mk"),
+    ("twrp_flags.go TW_NO_FLASH_CURRENT_TWRP", "bootable/recovery/twrp_flags.go"),
+    ("-DTW_NO_FLASH_CURRENT_TWRP", "-DTW_NO_FLASH_CURRENT_TWRP"),
+    ("twrp_tools_backend.cpp", "bootable/recovery/gui2/backend/twrp_tools_backend.cpp"),
+    ("disable_avb2 = false", "result.disable_avb2 = false;"),
+    ("fix_contexts = false", "result.fix_contexts = false;"),
+    ("install_kernel = false", "result.install_kernel = false;"),
+    ("gui2.cpp", "bootable/recovery/gui2/gui2.cpp"),
+    ("tw_auto_disable_avb2 gate", "tools->availability().disable_avb2"),
+    ("backup_tab_changed settle", "static void backup_tab_changed"),
+    ("restore_tab_changed settle", "static void restore_tab_changed"),
+    ("kBackupEncryptTarget scroll settle", "kBackupEncryptTarget"),
+    ("page_host.settle()", "page_host.settle();"),
+    ("lv_obj_scroll_to_y", "lv_obj_scroll_to_y(main_content, 0, LV_ANIM_OFF)"),
+    ("backup_page.cpp", "bootable/recovery/gui2/pages/backup_page.cpp"),
+    ("restore_page.cpp", "bootable/recovery/gui2/pages/restore_page.cpp"),
+    ("LV_DIR_HOR", "LV_DIR_HOR"),
+    ("battery_utils.cpp", "bootable/recovery/recovery_utils/battery_utils.cpp"),
+    ("AIDL health single log", "logged_aidl_unavailable"),
+]
+for label, needle in required_in_yml:
+    if needle not in src:
+        raise AssertionError(f"{sys.argv[1]}: missing Step D patch marker '{label}' ({needle})")
+print("✓ build.yml Step D patches verified (TW_NO_FLASH_CURRENT_TWRP, disable_avb2/install_kernel/fix_contexts/tw_auto_disable_avb2, Backup/Restore scroll + LV_DIR_HOR, battery_utils AIDL spam fix)")
+PYEOF
 
 # 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
@@ -366,9 +506,14 @@ if [ -n "$RAMDISK_ROOT" ]; then
     fi
     grep -qE "^\s*disabled\b" "$KS_RC" || { echo "ERROR: $KS_RC missing disabled flag!" >&2; exit 1; }
     validate_vintf_keymint_fragments "$RAMDISK_ROOT" "ramdisk"
+    validate_vendor_vintf "$RAMDISK_ROOT/vendor/etc/vintf/manifest.xml"
+    [ -x "$RAMDISK_ROOT/system/bin/android.hardware.boot@1.2-service" ] || { echo "ERROR: system/bin/android.hardware.boot@1.2-service missing in ramdisk!" >&2; exit 1; }
+    [ -f "$RAMDISK_ROOT/system/etc/init/android.hardware.boot@1.2-service.rc" ] || { echo "ERROR: system/etc/init/android.hardware.boot@1.2-service.rc missing in ramdisk!" >&2; exit 1; }
+    [ ! -e "$RAMDISK_ROOT/vendor/etc/init/android.hardware.boot@1.2-service.rc" ] || { echo "ERROR: conflicting vendor android.hardware.boot@1.2-service.rc found in ramdisk!" >&2; exit 1; }
+    validate_twrp_flags "$RAMDISK_ROOT/system/etc/twrp.flags"
     validate_override_spl "$RAMDISK_ROOT/system/bin/override-spl.sh"
     validate_ueventd_vendor "$RAMDISK_ROOT/vendor/etc/ueventd.rc"
-    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, both VINTF KeyMint+keystore2 XMLs, override-spl.sh PID guard, ueventd.rc)"
+    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, boot@1.2 service + VINTF + KeyMint/keystore2 XMLs, Step D twrp.flags, override-spl.sh PID loop, ueventd.rc)"
 fi
 
 # 8. ELF DT_NEEDED closure check
@@ -409,8 +554,11 @@ roots = [
     os.path.join(root, "vendor/bin/hw/vendor.qti.hardware.qseecom@1.0-service"),
     os.path.join(root, "vendor/bin/qseecomd"),
     os.path.join(root, "vendor/bin/ssgtzd"),
+    os.path.join(root, "vendor/lib64/hw/android.hardware.boot@1.0-impl-1.2-qti.so"),
     os.path.join(root, "vendor/lib64/hw/android.hardware.gatekeeper@1.0-impl-qti.so"),
     os.path.join(root, "vendor/lib64/hw/vendor.qti.hardware.qseecom@1.0-impl.so"),
+    os.path.join(root, "vendor/lib64/libboot_control_qti.so"),
+    os.path.join(root, "vendor/lib64/librecovery_updater.so"),
     os.path.join(root, "vendor/lib64/libqtikeymint.so"),
     os.path.join(root, "vendor/lib64/librpmb.so"),
     os.path.join(root, "vendor/lib64/libgpt.so"),
@@ -426,8 +574,13 @@ roots = [
     os.path.join(root, "vendor/lib64/libdisplayconfig.qti.so"),
     os.path.join(root, "vendor/lib64/vendor.display.config@2.0.so"),
 ]
+if strict:
+    roots.append(os.path.join(root, "system/bin/android.hardware.boot@1.2-service"))
 
 aosp_system_libs = {
+    "android.hardware.boot@1.0.so",
+    "android.hardware.boot@1.1.so",
+    "android.hardware.boot@1.2.so",
     "android.hardware.security.secureclock-V1-ndk.so",
     "android.hardware.security.sharedsecret-V1-ndk.so",
     "android.hidl.allocator@1.0.so",
