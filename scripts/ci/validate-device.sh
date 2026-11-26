@@ -23,9 +23,9 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step D) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step E) ==="
 
-# 1. Core + Step C/D structure check
+# 1. Core + Step C/D/E structure check
 for required_file in \
     "BoardConfig.mk" \
     "device.mk" \
@@ -33,6 +33,7 @@ for required_file in \
     "recovery.fstab" \
     "libinit/libinit_oplus_sm8550.cpp" \
     "recovery/root/init.recovery.qcom.rc" \
+    "recovery/root/init.recovery.usb.rc" \
     "recovery/root/system/bin/clear-bcb.sh" \
     "recovery/root/system/bin/override-spl.sh" \
     "recovery/root/system/etc/vintf/manifest.xml" \
@@ -186,6 +187,44 @@ if "pidof" not in pre_crypto or "keystore2" not in pre_crypto or "init.svc.keyst
     raise AssertionError(f"{fp}: must re-verify same keystore2 PID and init.svc.keystore2=running after sleep 1 before setting crypto.ready=1")
 if not re.search(r'"?\$\{?CUR_PID\}?"?\s*=\s*"?\$\{?KS_PID\}?"?', pre_crypto):
     raise AssertionError(f"{fp}: must verify PID equality after sleep 1 before setting crypto.ready=1")
+PYEOF
+}
+
+validate_clear_bcb() {
+    local bcb_path="$1"
+    python3 - "$bcb_path" <<'PYEOF'
+import sys
+fp = sys.argv[1]
+src = open(fp, "r", encoding="utf-8").read()
+idx_fastboot_cmd = src.find("boot-fastboot")
+idx_fastboot_arg = src.find("--fastboot")
+idx_zero = src.find("dd if=/dev/zero")
+if idx_fastboot_cmd == -1 or idx_fastboot_arg == -1:
+    raise AssertionError(f"{fp}: must preserve fastbootd BCB (boot-fastboot / --fastboot)")
+if idx_zero == -1 or "bs=128" not in src or "AFTER" not in src:
+    raise AssertionError(f"{fp}: must wipe 128-byte boot-recovery BCB with readback check")
+if idx_fastboot_cmd > idx_zero or idx_fastboot_arg > idx_zero:
+    raise AssertionError(f"{fp}: fastbootd BCB check must run BEFORE dd if=/dev/zero")
+PYEOF
+}
+
+validate_usb_rc() {
+    local usb_path="$1"
+    python3 - "$usb_path" <<'PYEOF'
+import re, sys
+fp = sys.argv[1]
+src = open(fp, "r", encoding="utf-8").read()
+if "0xD00D" in src:
+    raise AssertionError(f"{fp}: must NOT define conflicting fastboot PID 0xD00D")
+if re.search(r"on property:sys\.usb\.ffs\.ready=1\s*&&\s*property:sys\.usb\.config=fastboot", src):
+    raise AssertionError(f"{fp}: must NOT duplicate ffs.ready=1 && config=fastboot trigger from hw/init.rc")
+m_none = re.search(r"on property:sys\.usb\.config=none && property:sys\.usb\.configfs=1\n((?:    .*\n)+)", src)
+if not m_none or "stop fastbootd" not in m_none.group(1):
+    raise AssertionError(f"{fp}: sys.usb.config=none block must stop fastbootd")
+if "on property:sys.usb.config=fastboot && property:sys.usb.configfs=1" not in src or "idVendor 0x${ro.recovery.usb.vid}" not in src:
+    raise AssertionError(f"{fp}: must normalize idVendor to ro.recovery.usb.vid on fastboot")
+if "0xFF40" not in src or "0xFF48" not in src or "ffs.mtp" not in src:
+    raise AssertionError(f"{fp}: working MTP/ADB (0xFF40/0xFF48) triggers must remain intact")
 PYEOF
 }
 
@@ -388,13 +427,19 @@ if idx_spl == -1 or idx_bat == -1 or idx_spl > idx_bat:
     print("ERROR: start override-spl must come BEFORE wait /sys/class/power_supply/battery in init.recovery.qcom.rc", file=sys.stderr)
     sys.exit(1)
 PYEOF
-grep -q "bs=128" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || { echo "ERROR: clear-bcb.sh must zero 128 bytes!" >&2; exit 1; }
+grep -q "clear-bcb.sh" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || true
+validate_clear_bcb "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh"
+validate_usb_rc "$TARGET_DIR/recovery/root/init.recovery.usb.rc"
 validate_override_spl "$TARGET_DIR/recovery/root/system/bin/override-spl.sh"
 grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
 validate_ueventd_vendor "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
-echo "✓ Step D BoardConfig.mk (no my_colorospro, TW_NO_FLASH_CURRENT_TWRP), recovery.fstab, device.mk, init.recovery.qcom.rc (boot-hal-1-2), clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
+grep -qE "^\s*TARGET_RECOVERY_DEVICE_MODULES\s*\+=\s*sqlite3\b" "$BC" || { echo "ERROR: TARGET_RECOVERY_DEVICE_MODULES += sqlite3 missing in BoardConfig.mk" >&2; exit 1; }
+grep -qE "TW_RECOVERY_ADDITIONAL_RELINK_BINARY_FILES\s*\+=.*/sqlite3\b" "$BC" || { echo "ERROR: TW_RECOVERY_ADDITIONAL_RELINK_BINARY_FILES sqlite3 missing in BoardConfig.mk" >&2; exit 1; }
+grep -qE "^\s*PRODUCT_PACKAGES\s*\+=\s*sqlite3\b" "$TARGET_DIR/device.mk" || { echo "ERROR: PRODUCT_PACKAGES += sqlite3 missing in device.mk" >&2; exit 1; }
+grep -qE "^\s*ro\.fastbootd\.available\s*=\s*true\b" "$TARGET_DIR/system.prop" || { echo "ERROR: ro.fastbootd.available=true missing in system.prop" >&2; exit 1; }
+echo "✓ Step D/E BoardConfig.mk (no my_colorospro, TW_NO_FLASH_CURRENT_TWRP, sqlite3), recovery.fstab, device.mk, system.prop, init.recovery.{qcom,usb}.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
-# 3b. Verify Step D bootable/recovery + vendor/twrp patches in .github/workflows/build.yml
+# 3b. Verify Step D + Step E bootable/recovery + vendor/twrp patches in .github/workflows/build.yml
 BUILD_YML="$REPO_ROOT/.github/workflows/build.yml"
 [ -f "$BUILD_YML" ] || { echo "ERROR: $BUILD_YML not found!" >&2; exit 1; }
 python3 - "$BUILD_YML" <<'PYEOF'
@@ -420,11 +465,21 @@ required_in_yml = [
     ("LV_DIR_HOR", "LV_DIR_HOR"),
     ("battery_utils.cpp", "bootable/recovery/recovery_utils/battery_utils.cpp"),
     ("AIDL health single log", "logged_aidl_unavailable"),
+    ("twrp.cpp fastbootd modules", "KernelModuleLoader::LoadVendorModules();"),
+    ("twrp_functions DisableFlashlight", "TWFunc::DisableFlashlight"),
+    ("TwReboot DisableFlashlight", "DisableFlashlight();"),
+    ("gui2 shutdown disable_flashlight", "tools->disable_flashlight();"),
+    ("flashlight_page.cpp", "bootable/recovery/gui2/pages/flashlight_page.cpp"),
+    ("modules_page.cpp", "bootable/recovery/gui2/pages/modules_page.cpp"),
+    ("leds-qti-flash sysfs node", "led:switch_2"),
+    ("modules root path", "/data/adb/modules"),
+    ("page_id::FLASHLIGHT", "page_kind::FLASHLIGHT"),
+    ("page_id::MODULES", "page_kind::MODULES"),
 ]
 for label, needle in required_in_yml:
     if needle not in src:
-        raise AssertionError(f"{sys.argv[1]}: missing Step D patch marker '{label}' ({needle})")
-print("✓ build.yml Step D patches verified (TW_NO_FLASH_CURRENT_TWRP, disable_avb2/install_kernel/fix_contexts/tw_auto_disable_avb2, Backup/Restore scroll + LV_DIR_HOR, battery_utils AIDL spam fix)")
+        raise AssertionError(f"{sys.argv[1]}: missing Step D/E patch marker '{label}' ({needle})")
+print("✓ build.yml Step D + Step E patches verified")
 PYEOF
 
 # 4. Module list completeness, exclusions & duplicate check
@@ -432,7 +487,7 @@ MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
 [ -n "$MOD_LINE" ] || { echo "ERROR: TW_LOAD_VENDOR_MODULES missing from BoardConfig.mk" >&2; exit 1; }
 for mod in \
     qcom_glink.ko rproc_qcom_common.ko qcom_q6v5_pas.ko adsp_loader_dlkm.ko \
-    pmic_glink.ko oplus_chg.ko \
+    pmic_glink.ko oplus_chg.ko leds-qti-flash.ko \
     qseecom_proxy.ko smcinvoke_dlkm.ko \
     synaptics_tcm2.ko panel_event_notifier.ko olc.ko oplus_bsp_tp_custom.ko oplus_bsp_tp_comon.ko; do
     if ! grep -qw "$mod" <<<"$MOD_LINE"; then
@@ -511,9 +566,15 @@ if [ -n "$RAMDISK_ROOT" ]; then
     [ -f "$RAMDISK_ROOT/system/etc/init/android.hardware.boot@1.2-service.rc" ] || { echo "ERROR: system/etc/init/android.hardware.boot@1.2-service.rc missing in ramdisk!" >&2; exit 1; }
     [ ! -e "$RAMDISK_ROOT/vendor/etc/init/android.hardware.boot@1.2-service.rc" ] || { echo "ERROR: conflicting vendor android.hardware.boot@1.2-service.rc found in ramdisk!" >&2; exit 1; }
     validate_twrp_flags "$RAMDISK_ROOT/system/etc/twrp.flags"
+    validate_clear_bcb "$RAMDISK_ROOT/system/bin/clear-bcb.sh"
+    validate_usb_rc "$RAMDISK_ROOT/init.recovery.usb.rc"
     validate_override_spl "$RAMDISK_ROOT/system/bin/override-spl.sh"
     validate_ueventd_vendor "$RAMDISK_ROOT/vendor/etc/ueventd.rc"
-    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, boot@1.2 service + VINTF + KeyMint/keystore2 XMLs, Step D twrp.flags, override-spl.sh PID loop, ueventd.rc)"
+    PROP_DEF="$RAMDISK_ROOT/prop.default"
+    [ -f "$PROP_DEF" ] || PROP_DEF="$RAMDISK_ROOT/default.prop"
+    grep -qE "^\s*ro\.fastbootd\.available\s*=\s*true\b" "$PROP_DEF" || { echo "ERROR: ro.fastbootd.available=true missing in $PROP_DEF!" >&2; exit 1; }
+    [ -x "$RAMDISK_ROOT/system/bin/sqlite3" ] || { echo "ERROR: system/bin/sqlite3 missing or not executable in ramdisk!" >&2; exit 1; }
+    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, boot@1.2 service + VINTF, Step D/E twrp.flags/clear-bcb/usb.rc/override-spl/ueventd, ro.fastbootd.available=true, sqlite3)"
 fi
 
 # 8. ELF DT_NEEDED closure check
@@ -575,7 +636,13 @@ roots = [
     os.path.join(root, "vendor/lib64/vendor.display.config@2.0.so"),
 ]
 if strict:
-    roots.append(os.path.join(root, "system/bin/android.hardware.boot@1.2-service"))
+    roots.extend([
+        os.path.join(root, "system/bin/android.hardware.boot@1.2-service"),
+        os.path.join(root, "system/bin/recovery"),
+        os.path.join(root, "system/lib64/libgui2.so"),
+        os.path.join(root, "system/bin/fastbootd"),
+        os.path.join(root, "system/bin/sqlite3"),
+    ])
 
 aosp_system_libs = {
     "android.hardware.boot@1.0.so",
