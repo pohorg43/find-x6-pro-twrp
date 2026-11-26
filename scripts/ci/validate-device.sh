@@ -23,7 +23,7 @@ if [ -f "$REPO_ROOT/ci/twrp-spec.env" ]; then
     source "$REPO_ROOT/ci/twrp-spec.env"
 fi
 
-echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C3) ==="
+echo "=== Validating Device Tree in $TARGET_DIR (Stage 2 Step C4) ==="
 
 # 1. Core + Step C structure check
 for required_file in \
@@ -36,6 +36,7 @@ for required_file in \
     "recovery/root/system/bin/clear-bcb.sh" \
     "recovery/root/system/bin/override-spl.sh" \
     "recovery/root/system/etc/vintf/manifest.xml" \
+    "recovery/root/system/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml" \
     "recovery/root/system/etc/twrp.flags" \
     "recovery/root/vendor/etc/ueventd.rc" \
     "recovery/root/vendor/etc/ssg/ta_config.json" \
@@ -81,10 +82,129 @@ done
 [ -x "$TARGET_DIR/recovery/root/system/bin/override-spl.sh" ] || { echo "ERROR: override-spl.sh is not executable!" >&2; exit 1; }
 echo "✓ Core + Step C structure (clear-bcb.sh, override-spl.sh +0755, VINTF, 6 .rc) validated"
 
+validate_vintf_keymint_fragments() {
+    local root="$1"
+    local mode="$2"
+    python3 - "$root" "$mode" <<'PYEOF'
+import os, sys
+import xml.etree.ElementTree as ET
+
+root_dir, mode = sys.argv[1], sys.argv[2]
+required_aidl = {
+    ("android.hardware.security.keymint", "IKeyMintDevice/default"),
+    ("android.hardware.security.keymint", "IRemotelyProvisionedComponent/default"),
+    ("android.hardware.security.sharedsecret", "ISharedSecret/default"),
+    ("android.hardware.security.secureclock", "ISecureClock/default"),
+}
+
+def check_keymint_fragment(rel_path, expected_type, forbid_target_level):
+    fp = os.path.join(root_dir, rel_path)
+    if not os.path.isfile(fp):
+        raise AssertionError(f"[{mode}] Missing VINTF fragment: {fp}")
+    tree = ET.parse(fp)
+    manifest = tree.getroot()
+    if manifest.tag != "manifest":
+        raise AssertionError(f"[{mode}] Invalid root tag in {fp}: {manifest.tag}")
+    mtype = manifest.attrib.get("type")
+    if mtype != expected_type:
+        raise AssertionError(f"[{mode}] {fp}: expected type='{expected_type}', got '{mtype}'")
+    if forbid_target_level and "target-level" in manifest.attrib:
+        raise AssertionError(f"[{mode}] {fp}: must not specify target-level attribute")
+    found_aidl = set()
+    for hal in manifest.findall("hal"):
+        if hal.attrib.get("format") != "aidl":
+            continue
+        name_el = hal.find("name")
+        if name_el is None or not name_el.text:
+            continue
+        hal_name = name_el.text.strip()
+        for fq in hal.findall("fqname"):
+            if fq.text:
+                found_aidl.add((hal_name, fq.text.strip()))
+    missing = required_aidl - found_aidl
+    if missing:
+        raise AssertionError(f"[{mode}] {fp}: missing AIDL interfaces: {sorted(missing)}")
+
+check_keymint_fragment("system/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml", "framework", True)
+check_keymint_fragment("vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml", "device", False)
+
+if mode == "ramdisk":
+    ks_vintf = os.path.join(root_dir, "system/etc/vintf/manifest/android.system.keystore2-service.xml")
+    if not os.path.isfile(ks_vintf):
+        raise AssertionError(f"[{mode}] Missing framework keystore2 VINTF fragment: {ks_vintf}")
+    ET.parse(ks_vintf)
+PYEOF
+}
+
+validate_override_spl() {
+    local script_path="$1"
+    python3 - "$script_path" <<'PYEOF'
+import re, sys
+
+fp = sys.argv[1]
+src = open(fp, "r", encoding="utf-8").read()
+
+required_markers = [
+    ("twrp.storage.ready", "must wait for twrp.storage.ready"),
+    ("-t erofs", "must mount with explicit -t erofs"),
+    ("ro.build.version.release_or_codename", "must override ro.build.version.release_or_codename"),
+]
+for needle, msg in required_markers:
+    if needle not in src:
+        raise AssertionError(f"{fp}: {msg}")
+
+if not re.search(r"^\s*sleep\s+2(\s|$)", src, re.M):
+    raise AssertionError(f"{fp}: must keep sleep 2 before starting keystore2")
+
+ks_ready_m = re.search(r"setprop\s+vendor\.twrp\.keystore_ready\s+1", src)
+crypto_ready_m = re.search(r"setprop\s+crypto\.ready\s+1", src)
+if not ks_ready_m or not crypto_ready_m or ks_ready_m.start() >= crypto_ready_m.start():
+    raise AssertionError(f"{fp}: crypto.ready=1 must follow vendor.twrp.keystore_ready=1")
+
+tail = src[ks_ready_m.end():]
+pid_cap_m = re.search(r"pidof\s+keystore2", tail)
+svc_m1 = re.search(r"init\.svc\.keystore2", tail)
+sleep1_m = re.search(r"^\s*sleep\s+1(\s|$)", tail, re.M)
+if not pid_cap_m or not svc_m1 or not sleep1_m:
+    raise AssertionError(f"{fp}: must wait for keystore2 PID + init.svc.keystore2 and sleep 1 before crypto.ready=1")
+
+after_sleep1 = tail[sleep1_m.end():crypto_ready_m.start() - ks_ready_m.end()]
+if "pidof" not in after_sleep1 or "keystore2" not in after_sleep1 or "init.svc.keystore2" not in after_sleep1:
+    raise AssertionError(f"{fp}: must re-verify same keystore2 PID and init.svc.keystore2=running after sleep 1 before setting crypto.ready=1")
+if not re.search(r'"?\$\{?CUR_PID\}?"?\s*=\s*"?\$\{?KS_PID\}?"?', after_sleep1):
+    raise AssertionError(f"{fp}: must verify PID equality after sleep 1 against initial keystore2 PID")
+PYEOF
+}
+
+validate_ueventd_vendor() {
+    local ueventd_path="$1"
+    if grep -qE "^\s*subsystem\s+bsg\b" "$ueventd_path"; then
+        echo "ERROR: $ueventd_path must NOT declare subsystem bsg (nodes must stay directly in /dev/)!" >&2
+        exit 1
+    fi
+    if grep -qE "^\s*subsystem\s+dma_heap\b" "$ueventd_path"; then
+        echo "ERROR: $ueventd_path must NOT duplicate subsystem dma_heap (already in /system/etc/ueventd.rc)!" >&2
+        exit 1
+    fi
+    for rule in \
+        "/dev/smcinvoke" \
+        "/dev/dma_heap/system" \
+        "/dev/dma_heap/qcom,\*" \
+        "/dev/ion[[:space:]]" \
+        "/dev/0:0:0:49476[[:space:]]" \
+        "/dev/0:0:0:4[[:space:]]" \
+        "/dev/spss_utils[[:space:]]" \
+        "/dev/sp_keymaster[[:space:]]" \
+        "/dev/sec_nvm_\*[[:space:]]"; do
+        grep -qE "$rule" "$ueventd_path" || { echo "ERROR: Missing ueventd rule '$rule' in $ueventd_path" >&2; exit 1; }
+    done
+}
+
 # 1b. VINTF XML & twrp.flags validation
 SYS_VINTF="$TARGET_DIR/recovery/root/system/etc/vintf/manifest.xml"
 VEN_VINTF="$TARGET_DIR/recovery/root/vendor/etc/vintf/manifest.xml"
-python3 -c "import xml.etree.ElementTree as ET; ET.parse('$SYS_VINTF'); ET.parse('$VEN_VINTF'); ET.parse('$TARGET_DIR/recovery/root/vendor/etc/vintf/manifest/android.hardware.security.keymint-service-qti.xml')"
+python3 -c "import xml.etree.ElementTree as ET; ET.parse('$SYS_VINTF'); ET.parse('$VEN_VINTF')"
+validate_vintf_keymint_fragments "$TARGET_DIR/recovery/root" "pre-build"
 grep -q "android.hidl.manager" "$SYS_VINTF" && grep -q "@1.2::IServiceManager/default" "$SYS_VINTF" || {
     echo "ERROR: android.hidl.manager@1.2::IServiceManager/default missing in system VINTF manifest!" >&2; exit 1;
 }
@@ -100,7 +220,7 @@ if grep -qE "^\s*/(system_ext|system_dlkm|vendor_dlkm|metadata|firmware|persist|
     echo "ERROR: twrp.flags must not duplicate partitions already defined in recovery.fstab!" >&2
     exit 1
 fi
-echo "✓ VINTF manifests (hwservicemanager + 3 device HIDL HALs + KeyMint AIDL, no boot HAL) and minimal twrp.flags validated"
+echo "✓ VINTF manifests (hwservicemanager + 3 device HIDL HALs + KeyMint V2 AIDL framework+device, no boot HAL) and minimal twrp.flags validated"
 
 # 2. Partition size check
 BC="$TARGET_DIR/BoardConfig.mk"
@@ -162,31 +282,10 @@ if idx_spl == -1 or idx_bat == -1 or idx_spl > idx_bat:
     sys.exit(1)
 PYEOF
 grep -q "bs=128" "$TARGET_DIR/recovery/root/system/bin/clear-bcb.sh" || { echo "ERROR: clear-bcb.sh must zero 128 bytes!" >&2; exit 1; }
-OVERRIDE_SH="$TARGET_DIR/recovery/root/system/bin/override-spl.sh"
-grep -q "twrp.storage.ready" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must wait for twrp.storage.ready!" >&2; exit 1; }
-grep -q "\-t erofs" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must mount with explicit -t erofs!" >&2; exit 1; }
-grep -q "ro.build.version.release_or_codename" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must override ro.build.version.release_or_codename!" >&2; exit 1; }
-grep -qE "^\s*sleep 2(\s|$)" "$OVERRIDE_SH" || { echo "ERROR: override-spl.sh must keep sleep 2 before starting keystore2!" >&2; exit 1; }
+validate_override_spl "$TARGET_DIR/recovery/root/system/bin/override-spl.sh"
 grep -q "/system/bin/override-spl.sh" "$TARGET_DIR/recovery/root/vendor/etc/init/override-spl.rc" || { echo "ERROR: override-spl.rc must execute /system/bin/override-spl.sh" >&2; exit 1; }
-UEVENTD_VEN="$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
-if grep -qE "^\s*subsystem\s+bsg\b" "$UEVENTD_VEN"; then
-    echo "ERROR: vendor/etc/ueventd.rc must NOT declare subsystem bsg (nodes must stay directly in /dev/)!" >&2
-    exit 1
-fi
-for rule in \
-    "/dev/smcinvoke" \
-    "subsystem dma_heap" \
-    "/dev/dma_heap/system" \
-    "/dev/dma_heap/qcom,\*" \
-    "/dev/ion[[:space:]]" \
-    "/dev/0:0:0:49476[[:space:]]" \
-    "/dev/0:0:0:4[[:space:]]" \
-    "/dev/spss_utils[[:space:]]" \
-    "/dev/sp_keymaster[[:space:]]" \
-    "/dev/sec_nvm_\*[[:space:]]"; do
-    grep -qE "$rule" "$UEVENTD_VEN" || { echo "ERROR: Missing ueventd rule '$rule' in vendor/etc/ueventd.rc" >&2; exit 1; }
-done
-echo "✓ Step C3 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
+validate_ueventd_vendor "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
+echo "✓ Step C4 BoardConfig.mk, device.mk, init.recovery.qcom.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
 # 4. Module list completeness, exclusions & duplicate check
 MOD_LINE=$(grep -E "^\s*TW_LOAD_VENDOR_MODULES\s*:=" "$BC" | head -n1 || true)
@@ -250,17 +349,26 @@ print(f"✓ Overlay size hygiene validated ({total / (1024*1024):.2f} MiB <= 35 
 PYEOF
 fi
 
-# 7. Post-build keystore2.rc check (must not contain active critical window=0 or on late-init)
+# 7. Post-build ramdisk checks (keystore2.rc, framework/vendor VINTF, override-spl.sh, ueventd.rc)
 if [ -n "$RAMDISK_ROOT" ]; then
     KS_RC="$RAMDISK_ROOT/system/etc/init/keystore2.rc"
     [ -f "$KS_RC" ] || { echo "ERROR: $KS_RC missing in ramdisk root!" >&2; exit 1; }
+    KS_COUNT=$(find "$RAMDISK_ROOT" -name "*keystore2*.rc" | wc -l | tr -d ' ')
+    if [ "$KS_COUNT" != "1" ]; then
+        echo "ERROR: Expected exactly 1 keystore2*.rc in $RAMDISK_ROOT, found $KS_COUNT!" >&2
+        find "$RAMDISK_ROOT" -name "*keystore2*.rc" >&2
+        exit 1
+    fi
     if grep -qE "^\s*critical\b" "$KS_RC" || grep -qE "^\s*on\s+late-init" "$KS_RC"; then
         echo "ERROR: $KS_RC still contains active critical or on late-init!" >&2
         cat "$KS_RC" >&2
         exit 1
     fi
     grep -qE "^\s*disabled\b" "$KS_RC" || { echo "ERROR: $KS_RC missing disabled flag!" >&2; exit 1; }
-    echo "✓ Post-build keystore2.rc verified (disabled, no critical window=0)"
+    validate_vintf_keymint_fragments "$RAMDISK_ROOT" "ramdisk"
+    validate_override_spl "$RAMDISK_ROOT/system/bin/override-spl.sh"
+    validate_ueventd_vendor "$RAMDISK_ROOT/vendor/etc/ueventd.rc"
+    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, both VINTF KeyMint+keystore2 XMLs, override-spl.sh PID guard, ueventd.rc)"
 fi
 
 # 8. ELF DT_NEEDED closure check

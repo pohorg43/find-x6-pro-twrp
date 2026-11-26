@@ -157,19 +157,37 @@ sleep 2
 log "vendor.keymint-qti active; starting keystore2 (stage 2)"
 setprop vendor.twrp.keystore_ready 1
 
-# Wait up to 5s (10 x 0.5s) for keystore2 to stay running before marking crypto.ready=1
+# Wait up to 5s (10 x 0.5s) for keystore2 to start, then verify the same PID stays alive for 1s
+KS_PID=""
 m=0
 while [ "$m" -lt 10 ]; do
-	if pidof keystore2 >/dev/null 2>&1 && \
+	CAND_PID=$(pidof keystore2 2>/dev/null || true)
+	CAND_PID=${CAND_PID%% *}
+	if [ -n "$CAND_PID" ] && \
 	   [ "$(getprop init.svc.keystore2)" = "running" ]; then
-		setprop crypto.ready 1
-		setprop vendor.twrp.crypto_ready 1
-		log "crypto.ready=1 (keystore2 running after keymint-qti)"
-		exit 0
+		KS_PID="$CAND_PID"
+		break
 	fi
 	m=$((m + 1))
 	sleep 0.5
 done
 
-log "ERROR: keystore2 not running after 5s (svc=$(getprop init.svc.keystore2))"
+if [ -z "$KS_PID" ]; then
+	log "ERROR: keystore2 not running after 5s (svc=$(getprop init.svc.keystore2)); NOT setting crypto.ready=1"
+	exit 1
+fi
+
+sleep 1
+CUR_PID=$(pidof keystore2 2>/dev/null || true)
+CUR_PID=${CUR_PID%% *}
+if [ -n "$CUR_PID" ] && [ "$CUR_PID" = "$KS_PID" ] && \
+   [ -d "/proc/$KS_PID" ] && \
+   [ "$(getprop init.svc.keystore2)" = "running" ]; then
+	setprop crypto.ready 1
+	setprop vendor.twrp.crypto_ready 1
+	log "crypto.ready=1 (keystore2 pid=$KS_PID running cleanly after 1s check)"
+	exit 0
+fi
+
+log "ERROR: keystore2 crashed or restarted after start (initial_pid=$KS_PID, current_pid=${CUR_PID:-none}, svc=$(getprop init.svc.keystore2)); NOT setting crypto.ready=1"
 exit 1

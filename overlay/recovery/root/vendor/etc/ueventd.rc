@@ -1,7 +1,3 @@
-subsystem dma_heap
-    devname uevent_devpath
-    dirname /dev/dma_heap
-
 /dev/ion                  0664   system     system
 /dev/dma_heap/system      0444   system     system
 /dev/dma_heap/qcom,*      0444   system     system
