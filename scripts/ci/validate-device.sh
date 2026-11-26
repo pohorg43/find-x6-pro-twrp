@@ -439,13 +439,19 @@ grep -qE "^\s*PRODUCT_PACKAGES\s*\+=\s*sqlite3\b" "$TARGET_DIR/device.mk" || { e
 grep -qE "^\s*ro\.fastbootd\.available\s*=\s*true\b" "$TARGET_DIR/system.prop" || { echo "ERROR: ro.fastbootd.available=true missing in system.prop" >&2; exit 1; }
 echo "✓ Step D/E BoardConfig.mk (no my_colorospro, TW_NO_FLASH_CURRENT_TWRP, sqlite3), recovery.fstab, device.mk, system.prop, init.recovery.{qcom,usb}.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
-# 3b. Verify Step D + Step E bootable/recovery + vendor/twrp patches in .github/workflows/build.yml
+# 3b. Verify Step D + Step E bootable/recovery + vendor/twrp patches in scripts/ci/apply-recovery-patches.py and .github/workflows/build.yml
 BUILD_YML="$REPO_ROOT/.github/workflows/build.yml"
+PATCHER_PY="$REPO_ROOT/scripts/ci/apply-recovery-patches.py"
 [ -f "$BUILD_YML" ] || { echo "ERROR: $BUILD_YML not found!" >&2; exit 1; }
-python3 - "$BUILD_YML" <<'PYEOF'
+[ -f "$PATCHER_PY" ] || { echo "ERROR: $PATCHER_PY not found!" >&2; exit 1; }
+grep -q "scripts/ci/apply-recovery-patches.py" "$BUILD_YML" || {
+    echo "ERROR: $BUILD_YML must invoke scripts/ci/apply-recovery-patches.py!" >&2
+    exit 1
+}
+python3 - "$PATCHER_PY" <<'PYEOF'
 import sys
 src = open(sys.argv[1], "r", encoding="utf-8").read()
-required_in_yml = [
+required_in_patcher = [
     ("BoardConfigSoong.mk TW_NO_FLASH_CURRENT_TWRP", "vendor/twrp/config/BoardConfigSoong.mk"),
     ("twrp_flags.go TW_NO_FLASH_CURRENT_TWRP", "bootable/recovery/twrp_flags.go"),
     ("-DTW_NO_FLASH_CURRENT_TWRP", "-DTW_NO_FLASH_CURRENT_TWRP"),
@@ -476,10 +482,10 @@ required_in_yml = [
     ("page_id::FLASHLIGHT", "page_kind::FLASHLIGHT"),
     ("page_id::MODULES", "page_kind::MODULES"),
 ]
-for label, needle in required_in_yml:
+for label, needle in required_in_patcher:
     if needle not in src:
         raise AssertionError(f"{sys.argv[1]}: missing Step D/E patch marker '{label}' ({needle})")
-print("✓ build.yml Step D + Step E patches verified")
+print("✓ apply-recovery-patches.py + build.yml Step D/E hooks verified")
 PYEOF
 
 # 4. Module list completeness, exclusions & duplicate check
