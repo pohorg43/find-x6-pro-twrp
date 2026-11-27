@@ -20,19 +20,21 @@ index 9dc40fa..15964ea 100644
  
  # Soong namespaces
 diff --git a/device.mk b/device.mk
-index 69ff061..6eb3a5c 100644
+index 69ff061..8751746 100644
 --- a/device.mk
 +++ b/device.mk
-@@ -68,6 +68,9 @@ PRODUCT_BUILD_SUPER_PARTITION := false
+@@ -68,8 +68,9 @@ PRODUCT_BUILD_SUPER_PARTITION := false
  # fastbootd
  PRODUCT_PACKAGES += fastbootd
  
+-# Add default implementation of fastboot HAL.
+-PRODUCT_PACKAGES += android.hardware.fastboot@1.1-impl-mock
 +# sqlite3 CLI
 +PRODUCT_PACKAGES += sqlite3
 +
- # Add default implementation of fastboot HAL.
- PRODUCT_PACKAGES += android.hardware.fastboot@1.1-impl-mock
  
+ # qcom decryption
+ PRODUCT_PACKAGES += \
 diff --git a/system.prop b/system.prop
 index 299b7c4..02d00b4 100644
 --- a/system.prop

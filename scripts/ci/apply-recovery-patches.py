@@ -195,7 +195,7 @@ patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
     (
         "include posix headers for sysfs and module manager",
         "#include <unistd.h>\n\n#include <fstream>\n",
-        "#include <dirent.h>\n#include <fcntl.h>\n#include <sys/stat.h>\n#include <unistd.h>\n\n#include <algorithm>\n#include <cctype>\n#include <cerrno>\n#include <filesystem>\n#include <fstream>\n",
+        "#include <dirent.h>\n#include <fcntl.h>\n#include <sys/stat.h>\n#include <unistd.h>\n\n#include <algorithm>\n#include <cctype>\n#include <cerrno>\n#include <cstdlib>\n#include <filesystem>\n#include <fstream>\n",
     ),
     (
         "hide disable_avb2/fix_contexts/install_kernel and expose flashlight/modules",
@@ -229,18 +229,15 @@ patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
         namespace {
 
         constexpr const char* kFlashSwitchPath = "/sys/class/leds/led:switch_2/brightness";
-        constexpr const char* kFlashTorchPaths[] = {
-            "/sys/class/leds/led:torch_0/brightness",
+        constexpr const char* kFlashTorch0Path = "/sys/class/leds/led:torch_0/brightness";
+        constexpr const char* kFlashTorch0MaxPath = "/sys/class/leds/led:torch_0/max_brightness";
+        constexpr const char* kFlashSecondaryTorchPaths[] = {
             "/sys/class/leds/led:torch_1/brightness",
             "/sys/class/leds/led:torch_2/brightness",
             "/sys/class/leds/led:torch_3/brightness",
         };
-        constexpr const char* kFlashTorchMaxPaths[] = {
-            "/sys/class/leds/led:torch_0/max_brightness",
-            "/sys/class/leds/led:torch_1/max_brightness",
-            "/sys/class/leds/led:torch_2/max_brightness",
-            "/sys/class/leds/led:torch_3/max_brightness",
-        };
+        // 10-step perceptual curve (10%..100%) scaled for led:torch_0 max_brightness=500.
+        constexpr int kFlashTorchCurve[10] = {5, 12, 22, 38, 60, 95, 145, 220, 340, 500};
         constexpr const char* kModulesRoot = "/data/adb/modules";
 
         int read_sysfs_int(const char* path, int fallback) {
@@ -260,23 +257,29 @@ patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
         }
 
         int read_max_torch() {
-          for (const char* p : kFlashTorchMaxPaths) {
-            const int v = read_sysfs_int(p, 0);
-            if (v > 0) return std::max(50, v);
-          }
-          return 500;
+          const int v = read_sysfs_int(kFlashTorch0MaxPath, 500);
+          return v > 0 ? v : 500;
         }
 
         int step_to_hw(int step, int max_hw) {
-          step = std::clamp(step, 1, 10);
-          if (max_hw <= 50) return 50;
-          return 50 + (max_hw - 50) * (step - 1) / 9;
+          const int idx = std::clamp(step, 1, 10) - 1;
+          const int clamped_max = std::max(1, max_hw);
+          if (clamped_max == 500) return kFlashTorchCurve[idx];
+          const int scaled = (kFlashTorchCurve[idx] * clamped_max + 250) / 500;
+          return std::clamp(scaled, 1, clamped_max);
         }
 
         int hw_to_step(int hw, int max_hw) {
-          if (max_hw <= 50 || hw <= 50) return 1;
-          if (hw >= max_hw) return 10;
-          return std::clamp(1 + ((hw - 50) * 9 + (max_hw - 50) / 2) / (max_hw - 50), 1, 10);
+          int best_step = 1;
+          int best_diff = std::abs(hw - step_to_hw(1, max_hw));
+          for (int s = 2; s <= 10; ++s) {
+            const int diff = std::abs(hw - step_to_hw(s, max_hw));
+            if (diff < best_diff) {
+              best_diff = diff;
+              best_step = s;
+            }
+          }
+          return best_step;
         }
 
         bool is_safe_module_id(const std::string& id) {
@@ -326,17 +329,11 @@ patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
         }
 
         int twrp_tools_backend::flashlight_step() {
-          if (flashlight_enabled()) {
+          if (flashlight_enabled() && access(kFlashTorch0Path, F_OK) == 0) {
             const int max_hw = read_max_torch();
-            for (const char* p : kFlashTorchPaths) {
-              if (access(p, F_OK) != 0) continue;
-              const int cur = read_sysfs_int(p, -1);
-              if (cur > 0) {
-                if (cur != step_to_hw(flashlight_step_, max_hw))
-                  flashlight_step_ = hw_to_step(cur, max_hw);
-                break;
-              }
-            }
+            const int cur = read_sysfs_int(kFlashTorch0Path, -1);
+            if (cur > 0 && cur != step_to_hw(flashlight_step_, max_hw))
+              flashlight_step_ = hw_to_step(cur, max_hw);
           }
           return std::clamp(flashlight_step_, 1, 10);
         }
@@ -351,11 +348,11 @@ patch_file("bootable/recovery/gui2/backend/twrp_tools_backend.cpp", [
           const std::string val = std::to_string(hw);
           if (access(kFlashSwitchPath, W_OK) == 0)
             (void)write_sysfs_str(kFlashSwitchPath, "0");
-          bool torch_ok = false;
-          for (const char* p : kFlashTorchPaths) {
-            if (access(p, W_OK) != 0) continue;
-            if (write_sysfs_str(p, val)) torch_ok = true;
+          for (const char* p : kFlashSecondaryTorchPaths) {
+            if (access(p, W_OK) == 0) (void)write_sysfs_str(p, "0");
           }
+          const bool torch_ok = access(kFlashTorch0Path, W_OK) == 0 &&
+                                write_sysfs_str(kFlashTorch0Path, val);
           const bool sw_ok = access(kFlashSwitchPath, W_OK) == 0 &&
                              write_sysfs_str(kFlashSwitchPath, "1");
           return torch_ok && sw_ok;

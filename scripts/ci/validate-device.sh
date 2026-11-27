@@ -436,6 +436,10 @@ validate_ueventd_vendor "$TARGET_DIR/recovery/root/vendor/etc/ueventd.rc"
 grep -qE "^\s*TARGET_RECOVERY_DEVICE_MODULES\s*\+=\s*sqlite3\b" "$BC" || { echo "ERROR: TARGET_RECOVERY_DEVICE_MODULES += sqlite3 missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "TW_RECOVERY_ADDITIONAL_RELINK_BINARY_FILES\s*\+=.*/sqlite3\b" "$BC" || { echo "ERROR: TW_RECOVERY_ADDITIONAL_RELINK_BINARY_FILES sqlite3 missing in BoardConfig.mk" >&2; exit 1; }
 grep -qE "^\s*PRODUCT_PACKAGES\s*\+=\s*sqlite3\b" "$TARGET_DIR/device.mk" || { echo "ERROR: PRODUCT_PACKAGES += sqlite3 missing in device.mk" >&2; exit 1; }
+if grep -q "android.hardware.fastboot@1.1-impl-mock" "$TARGET_DIR/device.mk"; then
+    echo "ERROR: unused android.hardware.fastboot@1.1-impl-mock should be removed from device.mk!" >&2
+    exit 1
+fi
 grep -qE "^\s*ro\.fastbootd\.available\s*=\s*true\b" "$TARGET_DIR/system.prop" || { echo "ERROR: ro.fastbootd.available=true missing in system.prop" >&2; exit 1; }
 echo "✓ Step D/E BoardConfig.mk (no my_colorospro, TW_NO_FLASH_CURRENT_TWRP, sqlite3), recovery.fstab, device.mk, system.prop, init.recovery.{qcom,usb}.rc, clear-bcb.sh, override-spl.sh, and ueventd.rc validated"
 
@@ -478,6 +482,9 @@ required_in_patcher = [
     ("flashlight_page.cpp", "bootable/recovery/gui2/pages/flashlight_page.cpp"),
     ("modules_page.cpp", "bootable/recovery/gui2/pages/modules_page.cpp"),
     ("leds-qti-flash sysfs node", "led:switch_2"),
+    ("single-channel led:torch_0", "kFlashTorch0Path"),
+    ("force secondary torch channels off", "kFlashSecondaryTorchPaths"),
+    ("perceptual 10-step torch curve", "kFlashTorchCurve[10] = {5, 12, 22, 38, 60, 95, 145, 220, 340, 500}"),
     ("modules root path", "/data/adb/modules"),
     ("page_id::FLASHLIGHT", "page_kind::FLASHLIGHT"),
     ("page_id::MODULES", "page_kind::MODULES"),
@@ -580,7 +587,8 @@ if [ -n "$RAMDISK_ROOT" ]; then
     [ -f "$PROP_DEF" ] || PROP_DEF="$RAMDISK_ROOT/default.prop"
     grep -qE "^\s*ro\.fastbootd\.available\s*=\s*true\b" "$PROP_DEF" || { echo "ERROR: ro.fastbootd.available=true missing in $PROP_DEF!" >&2; exit 1; }
     [ -x "$RAMDISK_ROOT/system/bin/sqlite3" ] || { echo "ERROR: system/bin/sqlite3 missing or not executable in ramdisk!" >&2; exit 1; }
-    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, boot@1.2 service + VINTF, Step D/E twrp.flags/clear-bcb/usb.rc/override-spl/ueventd, ro.fastbootd.available=true, sqlite3)"
+    [ ! -e "$RAMDISK_ROOT/system/lib64/hw/android.hardware.fastboot@1.1-impl-mock.so" ] || { echo "ERROR: unused android.hardware.fastboot@1.1-impl-mock.so still present in ramdisk!" >&2; exit 1; }
+    echo "✓ Post-build ramdisk verified (single keystore2.rc disabled/no critical, boot@1.2 service + VINTF, Step D/E2 twrp.flags/clear-bcb/usb.rc/override-spl/ueventd, ro.fastbootd.available=true, sqlite3, no impl-mock)"
 fi
 
 # 8. ELF DT_NEEDED closure check
