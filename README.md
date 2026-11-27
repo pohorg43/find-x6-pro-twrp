@@ -1,4 +1,4 @@
-# YARP (TWRP 16) for OPPO Find X6 Pro (PGEM10)
+# YARP (Based on TWRP 16) for OPPO Find X6 Pro (PGEM10)
 
 ## Compatibility
 - **Device:** OPPO Find X6 Pro (`PGEM10`), unlocked bootloader required.
